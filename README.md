@@ -1,6 +1,6 @@
 # ParSlet: Prevalence-Aware Feature Selection Improves Biomarker Identification in Microbiome Studies
 
-This repository contains R code associated with our published work on prevalence-aware feature selection for microbiome biomarker discovery.
+R implementation associated with our published work on prevalence-aware feature selection for microbiome biomarker discovery.
 
 ## Publication
 
