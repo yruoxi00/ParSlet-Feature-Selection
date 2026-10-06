@@ -1,0 +1,19 @@
+# R temporary/workspace files
+.Rhistory
+.RData
+.RDataTmp
+.Ruserdata
+.Rproj.user/
+
+# macOS
+.DS_Store
+
+# Raw and large data
+data/
+
+# Large analysis outputs
+results/
+
+# Temporary files
+*.log
+*.tmp

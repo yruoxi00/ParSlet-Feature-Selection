@@ -1,0 +1,1662 @@
+---
+title: "Main Figures"
+author: "Ruoxi Yang"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  eval = FALSE
+)
+```
+
+### Figure 1 
+
+```{r}
+library(ggplot2)
+library(randomForest)
+library(pROC)
+library(dplyr)
+library(tidyr)
+library(reshape2)
+library(ggpubr)
+library(unikn) 
+library(treemap)
+library(treemapify)
+library(gridExtra)
+library(cowplot)
+
+setwd("/Users/yrx/Downloads/FeatureSelection/feature_selection/code")
+
+df <- read.csv("../data/random_forest_microbiome_bib.csv")
+
+df$Feature.Importance.Keywords <- as.character(df$Feature.Importance.Keywords)
+
+df_keywords <- df %>%
+  filter(Feature.Importance.Keywords != "") %>%
+  separate_rows(Feature.Importance.Keywords, sep = ", ") 
+
+keyword_mapping <- c(
+  "biomarker" = "biomarker",
+  "biomarkers" = "biomarker",
+  "importance score" = "importance score",
+  "feature importance" = "feature importance",
+  "variable importance" = "variable importance"
+)
+
+df_keywords <- df_keywords %>%
+  mutate(Feature.Importance.Keywords = recode(Feature.Importance.Keywords, !!!keyword_mapping))
+
+df_keywords_summary <- df_keywords %>%
+  group_by(Feature.Importance.Keywords) %>%
+  summarise(Count = n())
+
+years <- seq(min(df$Year, na.rm = TRUE), max(df$Year, na.rm = TRUE))
+
+g1 <- ggplot(df, aes(x = factor(Year, levels = years))) +
+  geom_bar(fill = "steelblue") +
+  scale_x_discrete(drop = FALSE) +
+  theme_bw() + xlab("Year") + ylab("Number of Papers") +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    strip.text = element_text(face = "bold.italic", size = 10),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    strip.background = element_blank(),
+    axis.ticks = element_line(size = 0.2),
+    axis.title.x = element_text(size = 11, face = "bold"),
+    axis.title.y = element_text(size = 11, face = "bold"), 
+    legend.position = "none"
+  )
+print(g1)
+
+df_keywords_summary$label2 <- paste0(df_keywords_summary$Feature.Importance.Keywords,
+                                     "\n", df_keywords_summary$Count)
+g2 <- ggplot(
+  df_keywords_summary,
+  aes(area = Count,
+      fill = Feature.Importance.Keywords,
+      label = label2)
+) +
+  geom_treemap() +
+  geom_treemap_text(
+    place = "centre",
+    grow = FALSE,
+    reflow = TRUE,
+    colour = "black",
+    fontface = "bold", 
+    size = 10
+  ) +
+  scale_fill_brewer(palette = "Set3") +
+  labs(y = "Feature importance 
+indicators") +
+  theme(
+    legend.position = "none",
+    axis.text = element_blank(),
+    strip.text = element_text(face = "bold.italic", size = 10),
+    axis.title.y = element_text(size = 11, face = "bold")
+  )
+print(g2)
+
+g3 <- plot_grid(
+  g1, g2,
+  labels = c("a", "b"),
+  label_size = 15,
+  ncol = 1,
+  align = "v",       
+  axis = "lr",       
+  rel_heights = c(1, 1) 
+)
+print(g3)
+
+ggsave("/Users/yrx/Downloads/png/Fig1.png", plot = g3, dpi = 1200)
+```
+
+### Figure 2
+
+```{r}
+library(ggplot2)
+library(randomForest)
+library(pROC)
+library(dplyr)
+library(tidyr)
+library(reshape2)
+library(ggpubr)
+library(ggtext)
+library(cowplot)
+
+setwd("/Users/yrx/Downloads/FeatureSelection/feature_selection/code")
+
+features <- read.csv(file = "../results/Real_feautures_filter.csv")
+
+pdf1 = list()
+pdf2 = list()
+pdf3 = list()
+pdf4 = list()
+
+index = 1
+
+for (ffs in unique(features$ff)[6:7]){
+  ngroup <-  length(unique(features$frac[features$ff==ffs]))
+  print(ngroup)
+  
+  taxa_table <- read.csv(file = paste("../data/",ffs,sep = ""))
+  set.seed(1)
+  train_indices1 <- sample(1:nrow(taxa_table), size = 0.1 * (ncol(taxa_table)-1))
+  
+  set.seed(8)
+  train_indices2 <- sample(1:nrow(taxa_table), size = 0.33 * (ncol(taxa_table)-1))
+  
+  features_sub <- features[features$rea==1 & features$ff==ffs,]
+  i1 <- features_sub$frac == unique(features_sub$frac)[1]
+  i2 <- features_sub$frac == unique(features_sub$frac)[8]
+  
+  feature_sub1 <- features_sub[i1,]
+  feature_sub2 <- features_sub[i2,]
+  
+  g1 <-  feature_sub1$MeanDecreaseGini
+  g2 <-  feature_sub2$MeanDecreaseGini
+  
+  a1 <-  feature_sub1$MeanDecreaseAccuracy
+  a2 <-  feature_sub2$MeanDecreaseAccuracy
+  
+  sorted_indicesg1 <- order(g1,decreasing = T)
+  sorted_indicesg2 <- order(g2,decreasing = T)
+  
+  sorted_indicesa1 <- order(a1,decreasing = T)
+  sorted_indicesa2 <- order(a2,decreasing = T)
+  
+  top_n = floor(0.1*length(g1))
+  
+  train_table1 <- taxa_table[train_indices1,]
+  train_table2 <- taxa_table[train_indices2,]
+  
+  data_rich1 <- data.frame(species = colnames(train_table1),richness = colSums(train_table1>0))
+  data_rich2 <- data.frame(species = colnames(train_table2),richness = colSums(train_table2>0))  
+  
+  data_rich1$richness <- data_rich1$richness/nrow(train_table1)
+  data_rich2$richness <- data_rich2$richness/nrow(train_table2)
+  
+  
+  dat1 <- data.frame(features1 = feature_sub1$Feature[sorted_indicesg1[1:top_n]],rank=1:top_n,
+                     richness1=data_rich1$richness[match(feature_sub1$Feature[sorted_indicesg1[1:top_n]],data_rich1$species)],
+                     importance1 = feature_sub1$MeanDecreaseGini[sorted_indicesg1[1:top_n]],
+                     
+                     features2 = feature_sub2$Feature[sorted_indicesg2[1:top_n]],rank=1:top_n,
+                     richness2=data_rich2$richness[match(feature_sub2$Feature[sorted_indicesg2[1:top_n]],data_rich2$species)],
+                     importance2 = feature_sub2$MeanDecreaseGini[sorted_indicesg2[1:top_n]],
+                     
+                     features3 = feature_sub1$Feature[sorted_indicesa1[1:top_n]],rank=1:top_n,
+                     richness3=data_rich1$richness[match(feature_sub1$Feature[sorted_indicesa1[1:top_n]],data_rich1$species)],
+                     importance3 = feature_sub1$MeanDecreaseAccuracy[sorted_indicesa1[1:top_n]],
+                     
+                     features4 = feature_sub2$Feature[sorted_indicesa2[1:top_n]],rank=1:top_n,
+                     richness4=data_rich2$richness[match(feature_sub2$Feature[sorted_indicesa2[1:top_n]],data_rich2$species)],
+                     importance4 = feature_sub2$MeanDecreaseAccuracy[sorted_indicesa2[1:top_n]]
+  )
+  
+  extract_genus <- function(x) {
+    result <- "unclassified"
+    
+    genus <- stringr::str_match(x, "g__([^.; ]*)")[,2]
+    if (!is.na(genus) && genus != "" && genus != "." && genus != "_") return(genus)
+    
+    family <- stringr::str_match(x, "f__([^.; ]*)")[,2]
+    if (!is.na(family) && family != "" && family != "." && family != "_") return(family)
+    
+    order <- stringr::str_match(x, "o__([^.; ]*)")[,2]
+    if (!is.na(order) && order != "" && order != "." && order != "_") return(order)
+    
+    class <- stringr::str_match(x, "c__([^.; ]*)")[,2]
+    if (!is.na(class) && class != "" && class != "." && class != "_") return(class)
+    
+    phylum <- stringr::str_match(x, "p__([^.; ]*)")[,2]
+    if (!is.na(phylum) && phylum != "" && phylum != "." && phylum != "_") return(phylum)
+    
+    kingdom <- stringr::str_match(x, "k__([^.; ]*)")[,2]
+    if (!is.na(kingdom) && kingdom != "" && kingdom != "." && kingdom != "_") return(kingdom)
+    
+    return(result)
+  }
+  
+  dat1$genus1 <- vapply(dat1$features1, extract_genus, "")
+  dat1$genus2 <- vapply(dat1$features2, extract_genus, "")
+  dat1$genus3 <- vapply(dat1$features3, extract_genus, "")
+  dat1$genus4 <- vapply(dat1$features4, extract_genus, "")
+  
+  highlight_taxa <- c("Clostridium_XVIII","Ruminococcus", "Peptostreptococcus")
+  dat1$genus1_lab <- ifelse(dat1$genus1 %in% highlight_taxa,
+                            paste0("<span style='color:#33a02c'>", dat1$genus1, "</span>"),
+                            dat1$genus1)
+  dat1$genus2_lab <- ifelse(dat1$genus2 %in% highlight_taxa,
+                            paste0("<span style='color:#33a02c'>", dat1$genus2, "</span>"),
+                            dat1$genus2)
+  dat1$genus3_lab <- ifelse(dat1$genus3 %in% highlight_taxa,
+                            paste0("<span style='color:#33a02c'>", dat1$genus3, "</span>"),
+                            dat1$genus3)
+  dat1$genus4_lab <- ifelse(dat1$genus4 %in% highlight_taxa,
+                            paste0("<span style='color:#33a02c'>", dat1$genus4, "</span>"),
+                            dat1$genus4)
+  
+  pdf1[[index]] <- ggplot(dat1, aes(importance1, reorder(genus1_lab,importance1))) +
+    geom_segment(aes(yend = genus1_lab, xend = 0), color = "gray70", size = 0.7) +
+    geom_point(aes(size = abs(richness1)), color="#fb8072") +
+    scale_size_continuous(range = c(0.5, 4)) +
+    theme_bw() + xlab("Gini impurity") + ylab("") +
+    theme(
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      axis.text.y = element_markdown(size=10),   
+      axis.title.x = element_text(size = 8, face = "bold"),
+      legend.position = "none"
+    )
+  
+  pdf2[[index]] <- ggplot(dat1, aes(importance2, reorder(genus2_lab,importance2))) +
+    geom_segment(aes(yend = genus2_lab, xend = 0), color = "gray70", size = 0.7) +
+    geom_point(aes(size = abs(richness2)), color="#fb8072") +
+    scale_size_continuous(range = c(0.5, 4)) +
+    theme_bw() + xlab("Gini impurity") + ylab("") +
+    theme(
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      axis.text.y = element_markdown(size=10),
+      axis.title.x = element_text(size = 8, face = "bold"),
+      legend.position = "none"
+    )
+  
+  pdf3[[index]] <- ggplot(dat1, aes(importance3, reorder(genus3_lab,importance3))) +
+    geom_segment(aes(yend = genus3_lab, xend = 0), color = "gray70", size = 0.7) +
+    geom_point(aes(size = abs(richness3)), color="#fb8072") +
+    scale_size_continuous(range = c(0.5, 4)) +
+    theme_bw() + xlab("Mean decrease accuracy") + ylab("") +
+    theme(
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      axis.text.y = element_markdown(size=10),
+      axis.title.x = element_text(size = 8, face = "bold"),
+      legend.position = "none"
+    )
+  
+  pdf4[[index]] <- ggplot(dat1, aes(importance4, reorder(genus4_lab,importance4))) +
+    geom_segment(aes(yend = genus4_lab, xend = 0), color = "gray70", size = 0.7) +
+    geom_point(aes(size = abs(richness4)), color="#fb8072") +
+    scale_size_continuous(range = c(0.5, 4)) +
+    theme_bw() + xlab("Mean decrease accuracy") + ylab("") +
+    theme(
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      axis.text.y = element_markdown(size=10),
+      axis.title.x = element_text(size = 8, face = "bold"),
+      legend.position = "none"
+    )
+  
+  index = index + 1
+}
+
+plots1 <- c(pdf1, pdf2, pdf3, pdf4)
+aligned1 <- align_plots(plotlist = plots1, align = "hv")
+
+p1 <- plot_grid(plotlist = aligned1, ncol = 4, nrow = 2,
+                   labels = c("a","b","c","d","e","f","g","h"))
+print(p1)
+
+header_row <- ggarrange(
+  as_ggplot(text_grob("CRC_Baxter (10% training)", face = "bold", size = 10)),
+  as_ggplot(text_grob("CRC_Zeller (10% training)", face = "bold", size = 10)),
+  as_ggplot(text_grob("CRC_Baxter (33% training)", face = "bold", size = 10)),
+  as_ggplot(text_grob("CRC_Zeller (33% training)", face = "bold", size = 10)),
+  ncol = 4
+)
+
+final_plot <- ggarrange(
+  header_row,
+  p1,   
+  ncol = 1, nrow = 2,
+  heights = c(0.1, 1, 1)
+)
+print(final_plot)
+
+ggsave("/Users/yrx/Downloads/png/Fig2.png", plot = final_plot, width = 16, height = 6, dpi = 500)
+
+```
+
+### Figure 3 
+
+```{r}
+library(ggplot2)
+library(randomForest)
+library(pROC)
+library(dplyr)
+library(tidyr)
+library(reshape2)
+library(ggpubr)
+library(paletteer)
+
+setwd("/Users/yrx/Downloads/FeatureSelection/feature_selection/code")
+
+features <- read.csv(file = "../results/Simulated0.01_features.csv")
+ngroup <-  length(unique(features$frac))
+pdf1 <- list()
+index <- 1
+
+for (ffs in c(0.05,0.1,0.2)){
+  dat1 <- NULL
+  dat1_sub <- read.csv(file = paste("../data/Stool0.01_f_",2,'_',ffs,'.csv',sep = ""),row.names = 1, header = T)
+  for (rea in 1:10){
+    for (i in 1:ngroup){
+        features_sub <- features[features$rea==rea & features$ff==ffs,]
+        i1 <- features_sub$frac == unique(features_sub$frac)[i]
+        g1 <-  features_sub$MeanDecreaseGini[i1]
+        a1 <-  features_sub$MeanDecreaseAccuracy[i1]
+        sorted_indicesg1 <- order(g1,decreasing = T)
+        sorted_indicesa1 <- order(a1,decreasing = T)
+
+        set.seed(rea)
+        train_table1 <- dat1_sub[sample(1:nrow(dat1_sub), size = unique(features_sub$frac)[i] * ncol(dat1_sub)),]
+
+        data_rich <- data.frame(species=colnames(train_table1),richness1=colSums(train_table1>0)/nrow(train_table1))
+        
+        r1 <- as.numeric(data_rich$richness1[match(features_sub$Feature[i1],data_rich$species)])
+
+        top_n = floor(0.1*length(g1))
+        
+        dat1 <- rbind(dat1, data.frame(features = sorted_indicesg1[1:top_n],richness=r1[sorted_indicesg1[1:top_n]]))
+
+    }
+  }
+  
+  new_df <- dat1 %>%
+    group_by(features) %>%
+    summarise(
+      frequency = n(),           
+      mean_richness = mean(richness, na.rm = TRUE)
+    )
+  
+  new_df$frequency <- new_df$frequency/10/ngroup
+  new_df <- new_df %>%
+    mutate(transformed_richness = mean_richness^(3.0))
+  
+  fit <- lm(frequency ~ transformed_richness, data = new_df)
+  new_df <- new_df %>%
+    mutate(fitted_values = predict(fit, newdata = .))
+  
+  pdf1[[index]] <- ggplot(new_df, aes(mean_richness, frequency)) +
+    geom_point(color="#0F7BA2FF",size=2,alpha=0.6) +
+    geom_line(aes(y = fitted_values), color = "#DD5129FF", size = 1) +
+    theme_bw()+xlab("")+ylab("")+labs(title = paste("Fraction of spiking-in:", ffs))+
+    theme(
+      plot.title = element_text(hjust = 0.5, size = 8),
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      strip.text = element_text(face = "bold.italic", size = 10),
+      strip.background = element_blank(),
+      axis.text.x = element_text(size = 8,color = 'black'),
+      axis.text.y = element_text(size = 8,color = 'black'),
+      #strip.text.x = element_blank(),
+      axis.ticks = element_line(size = 0.2),
+      legend.position = "none")
+  
+  index <- index + 1
+}
+
+pdf1[[1]] <- pdf1[[1]] + ylab("Frequency")
+
+p1 = do.call(ggarrange, c(pdf1, list(labels = c("a", "b", "c"),ncol = 3, nrow = 1),align="hv"))
+
+features <- read.csv(file = "../results/Simulated0.05_features.csv")
+ngroup <-  length(unique(features$frac))
+pdf1 <- list()
+index <- 1
+
+for (ffs in c(0.05,0.1,0.2)){
+  dat1 <- NULL
+  dat1_sub <- read.csv(file = paste("../data/Stool0.05_f_",2,'_',ffs,'.csv',sep = ""),row.names = 1, header = T)
+  for (rea in 1:10){
+    for (i in 1:ngroup){
+      features_sub <- features[features$rea==rea & features$ff==ffs,]
+      i1 <- features_sub$frac == unique(features_sub$frac)[i]
+      g1 <-  features_sub$MeanDecreaseGini[i1]
+      a1 <-  features_sub$MeanDecreaseAccuracy[i1]
+      sorted_indicesg1 <- order(g1,decreasing = T)
+      sorted_indicesa1 <- order(a1,decreasing = T)
+      
+      set.seed(rea)
+      train_table1 <- dat1_sub[sample(1:nrow(dat1_sub), size = unique(features_sub$frac)[i] * ncol(dat1_sub)),]
+      
+      data_rich <- data.frame(species=colnames(train_table1),richness1=colSums(train_table1>0)/nrow(train_table1))
+      
+      r1 <- as.numeric(data_rich$richness1[match(features_sub$Feature[i1],data_rich$species)])
+      
+      top_n = floor(0.1*length(g1))
+      
+      dat1 <- rbind(dat1, data.frame(features = sorted_indicesg1[1:top_n],richness=r1[sorted_indicesg1[1:top_n]]))
+      
+    }
+  }
+  
+  new_df <- dat1 %>%
+    group_by(features) %>%
+    summarise(
+      frequency = n(),           
+      mean_richness = mean(richness, na.rm = TRUE)  
+    )
+  
+  new_df$frequency <- new_df$frequency/10/ngroup
+  new_df <- new_df %>%
+    mutate(transformed_richness = mean_richness^(3.0))
+  
+  fit <- lm(frequency ~ transformed_richness, data = new_df)
+  new_df <- new_df %>%
+    mutate(fitted_values = predict(fit, newdata = .))
+  
+  pdf1[[index]] <- ggplot(new_df, aes(mean_richness, frequency)) +
+    geom_point(color="#0F7BA2FF",size=2,alpha=0.6) +
+    geom_line(aes(y = fitted_values), color = "#DD5129FF", size = 1) +
+    theme_bw()+xlab("")+ylab("")+
+    theme(
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      strip.text = element_text(face = "bold.italic", size = 10),
+      strip.background = element_blank(),
+      axis.text.x = element_text(size = 8,color = 'black'),
+      axis.text.y = element_text(size = 8,color = 'black'),
+      #strip.text.x = element_blank(),
+      axis.ticks = element_line(size = 0.2),
+      legend.position = "none")
+  
+  index <- index + 1
+}
+
+pdf1[[1]] <- pdf1[[1]] + ylab("Frequency")
+
+p2 = do.call(ggarrange, c(pdf1, list(labels = c("d", "e", "f"),ncol = 3, nrow = 1),align="hv"))
+
+features <- read.csv(file = "../results/Simulated0.2_features.csv")
+ngroup <-  length(unique(features$frac))
+pdf1 <- list()
+index <- 1
+
+for (ffs in c(0.05,0.1,0.2)){
+  dat1 <- NULL
+  dat1_sub <- read.csv(file = paste("../data/Stool0.2_f_",2,'_',ffs,'.csv',sep = ""),row.names = 1, header = T)
+  for (rea in 1:10){
+    for (i in 1:ngroup){
+      features_sub <- features[features$rea==rea & features$ff==ffs,]
+      i1 <- features_sub$frac == unique(features_sub$frac)[i]
+      g1 <-  features_sub$MeanDecreaseGini[i1]
+      a1 <-  features_sub$MeanDecreaseAccuracy[i1]
+      sorted_indicesg1 <- order(g1,decreasing = T)
+      sorted_indicesa1 <- order(a1,decreasing = T)
+      
+      set.seed(rea)
+      train_table1 <- dat1_sub[sample(1:nrow(dat1_sub), size = unique(features_sub$frac)[i] * ncol(dat1_sub)),]
+      
+      data_rich <- data.frame(species=colnames(train_table1),richness1=colSums(train_table1>0)/nrow(train_table1))
+      
+      r1 <- as.numeric(data_rich$richness1[match(features_sub$Feature[i1],data_rich$species)])
+      
+      top_n = floor(0.1*length(g1))
+      
+      dat1 <- rbind(dat1, data.frame(features = sorted_indicesg1[1:top_n],richness=r1[sorted_indicesg1[1:top_n]]))
+      
+    }
+  }
+  
+  new_df <- dat1 %>%
+    group_by(features) %>%
+    summarise(
+      frequency = n(),           
+      mean_richness = mean(richness, na.rm = TRUE)  
+    )
+  
+  new_df$frequency <- new_df$frequency/10/ngroup
+  new_df <- new_df %>%
+    mutate(transformed_richness = mean_richness^(3.0))
+  
+  fit <- lm(frequency ~ transformed_richness, data = new_df)
+  new_df <- new_df %>%
+    mutate(fitted_values = predict(fit, newdata = .))
+  
+  pdf1[[index]] <- ggplot(new_df, aes(mean_richness, frequency)) +
+    geom_point(color="#0F7BA2FF",size=2,alpha=0.6) +
+    geom_line(aes(y = fitted_values), color = "#DD5129FF", size = 1) +
+    theme_bw()+xlab("Prevalence")+ylab("")+
+    theme(
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      strip.text = element_text(face = "bold.italic", size = 10),
+      strip.background = element_blank(),
+      axis.text.x = element_text(size = 8,color = 'black'),
+      axis.text.y = element_text(size = 8,color = 'black'),
+      #strip.text.x = element_blank(),
+      axis.ticks = element_line(size = 0.2),
+      legend.position = "none")
+  
+  index <- index + 1
+}
+
+pdf1[[1]] <- pdf1[[1]] + ylab("Frequency")
+
+p3 = do.call(ggarrange, c(pdf1, list(labels = c("g", "h", "i"),ncol = 3, nrow = 1),align="hv"))
+
+p4 = ggarrange(p1,p2,p3,ncol = 1,nrow=3,align = "hv")
+print(p4)
+
+ggsave("/Users/yrx/Downloads/png/Fig3.png", plot = p4, width=7, height=6, dpi = 1200)
+
+```
+
+### Figure 4 
+
+```{r}
+# Simulated Features Data 
+
+library(ggplot2)
+library(randomForest)
+library(pROC)
+
+setwd("/Users/yrx/Downloads/FeatureSelection/feature_selection/code")
+AUC = NULL
+features = NULL
+
+for (rea in 1:10){
+  for (frac in seq(0.1, 1, length.out = 10)){
+    for (ff in c(0.05,0.1,0.2)){
+      set.seed(rea)
+      dat1_sub <- read.csv(file = paste("../data/Stool0.01_f_",2,'_',ff,'.csv',sep = ""),row.names = 1, header = T)
+      meta_data <- read.csv(file = paste('../data/Spike_Stool0.01__f_',2,'_',ff,'.csv',sep = ""),row.names = 1, header = T)
+      
+      dat1_sub$status <- factor(dat1_sub$status)
+      
+      dat1_sub <- dat1_sub[sample(1:nrow(dat1_sub), size = frac * ncol(dat1_sub)),]
+      train_indices <- sample(1:nrow(dat1_sub), size = 0.8 * nrow(dat1_sub))
+      train_data <- dat1_sub[train_indices, ]
+      test_data <- dat1_sub[-train_indices, ]
+      
+      set.seed(rea)
+      rf_model <- randomForest(
+        status ~ .,
+        data = train_data,
+        importance = TRUE,
+        probability = TRUE
+      )
+      predictions <- predict(rf_model, test_data, type = "prob")
+      roc_curve <- roc(test_data$status, predictions[, 1])
+      
+      AUC = rbind(AUC,data.frame(AUC=as.numeric(auc(roc_curve)),ff=ff,frac=frac, rea=rea))
+      
+      importance_data <- as.data.frame(importance(rf_model))
+      importance_data$Feature <- rownames(importance_data)
+      importance_data$ff=ff
+      importance_data$frac=frac
+      importance_data$rank = rank(importance_data$MeanDecreaseGini)
+      importance_data$rea = rea
+      features = rbind(features,importance_data[,3:9])
+    }
+  }
+}
+
+# write.csv(AUC,file = "Simulated0.01_AUC.csv",row.names = F)
+# write.csv(features,file = "Simulated0.01_features.csv",row.names = F)
+
+AUC = NULL
+features = NULL
+for (rea in 1:10){
+  for (frac in seq(0.1, 1, length.out = 10)){
+    for (ff in c(0.05,0.1,0.2)){
+      set.seed(rea)
+      dat1_sub <- read.csv(file = paste("../data/Stool0.05_f_",2,'_',ff,'.csv',sep = ""),row.names = 1, header = T)
+      meta_data <- read.csv(file = paste('../data/Spike_Stool0.05__f_',2,'_',ff,'.csv',sep = ""),row.names = 1, header = T)
+      
+      dat1_sub$status <- factor(dat1_sub$status)
+      
+      dat1_sub <- dat1_sub[sample(1:nrow(dat1_sub), size = frac * ncol(dat1_sub)),]
+      train_indices <- sample(1:nrow(dat1_sub), size = 0.8 * nrow(dat1_sub))
+      train_data <- dat1_sub[train_indices, ]
+      test_data <- dat1_sub[-train_indices, ]
+      
+      set.seed(rea)
+      rf_model <- randomForest(
+        status ~ .,
+        data = train_data,
+        importance = TRUE,
+        probability = TRUE
+      )
+      predictions <- predict(rf_model, test_data, type = "prob")
+      roc_curve <- roc(test_data$status, predictions[, 1])
+      
+      AUC = rbind(AUC,data.frame(AUC=as.numeric(auc(roc_curve)),ff=ff,frac=frac, rea=rea))
+      
+      importance_data <- as.data.frame(importance(rf_model))
+      importance_data$Feature <- rownames(importance_data)
+      importance_data$ff=ff
+      importance_data$frac=frac
+      importance_data$rank = rank(importance_data$MeanDecreaseGini)
+      importance_data$rea = rea
+      features = rbind(features,importance_data[,3:9])
+    }
+  }
+}
+
+# write.csv(AUC,file = "Simulated0.05_AUC.csv",row.names = F)
+# write.csv(features,file = "Simulated0.05_features.csv",row.names = F)
+
+AUC = NULL
+features = NULL
+for (rea in 1:10){
+  for (frac in seq(0.1, 1, length.out = 10)){
+    for (ff in c(0.05,0.1,0.2)){
+      set.seed(rea)
+      dat1_sub <- read.csv(file = paste("../data/Stool0.2_f_",2,'_',ff,'.csv',sep = ""),row.names = 1, header = T)
+      meta_data <- read.csv(file = paste('../data/Spike_Stool0.2__f_',2,'_',ff,'.csv',sep = ""),row.names = 1, header = T)
+      
+      dat1_sub$status <- factor(dat1_sub$status)
+      
+      dat1_sub <- dat1_sub[sample(1:nrow(dat1_sub), size = frac * ncol(dat1_sub)),]
+      train_indices <- sample(1:nrow(dat1_sub), size = 0.8 * nrow(dat1_sub))
+      train_data <- dat1_sub[train_indices, ]
+      test_data <- dat1_sub[-train_indices, ]
+      
+      set.seed(rea)
+      rf_model <- randomForest(
+        status ~ .,
+        data = train_data,
+        importance = TRUE,
+        probability = TRUE
+      )
+      predictions <- predict(rf_model, test_data, type = "prob")
+      roc_curve <- roc(test_data$status, predictions[, 1])
+      
+      AUC = rbind(AUC,data.frame(AUC=as.numeric(auc(roc_curve)),ff=ff,frac=frac, rea=rea))
+      
+      importance_data <- as.data.frame(importance(rf_model))
+      importance_data$Feature <- rownames(importance_data)
+      importance_data$ff=ff
+      importance_data$frac=frac
+      importance_data$rank = rank(importance_data$MeanDecreaseGini)
+      importance_data$rea = rea
+      features = rbind(features,importance_data[,3:9])
+    }
+  }
+}
+
+# write.csv(AUC,file = "Simulated0.2_AUC.csv",row.names = F)
+# write.csv(features,file = "Simulated0.2_features.csv",row.names = F)
+
+# Figure 4 
+
+library(ggplot2)
+library(randomForest)
+library(pROC)
+library(dplyr)
+library(tidyr)
+library(reshape2)
+library(ggpubr)
+library(paletteer)
+library(gridExtra)
+library(cowplot)
+
+setwd("/Users/yrx/Downloads/FeatureSelection/feature_selection/code")
+
+features <- read.csv(file = "../results/Simulated0.01_features.csv")
+ngroup <-  length(unique(features$frac))
+pdf1 <- list()
+index <- 1
+for (ffs in c(0.05,0.1,0.2)){
+  dat1_sub <- read.csv(file = paste("../data/Stool0.01_f_",2,'_',ffs,'.csv',sep = ""),row.names = 1, header = T)
+
+  overlap_matrix1 <- matrix(0, nrow = ngroup,ncol=ngroup)
+  overlap_matrix2 <- matrix(0,nrow = ngroup,ncol=ngroup)
+  overlap_matrix3 <- matrix(0, nrow = ngroup,ncol=ngroup)
+  overlap_matrix4 <- matrix(0,nrow = ngroup,ncol=ngroup)
+  
+  for (rea in 1:10){
+    for (i in 1:ngroup){
+      for (j in 1:ngroup){
+        features_sub <- features[features$rea==rea & features$ff==ffs,]
+        i1 <- features_sub$frac == unique(features_sub$frac)[i]
+        i2 <- features_sub$frac == unique(features_sub$frac)[j]
+        
+        g1 <-  features_sub$MeanDecreaseGini[i1]
+        g2 <-  features_sub$MeanDecreaseGini[i2]
+        
+        a1 <-  features_sub$MeanDecreaseAccuracy[i1]
+        a2 <-  features_sub$MeanDecreaseAccuracy[i2]
+      
+        sorted_indicesg1 <- order(g1,decreasing = T)
+        sorted_indicesg2 <- order(g2,decreasing = T)
+      
+        sorted_indicesa1 <- order(a1,decreasing = T)
+        sorted_indicesa2 <- order(a2,decreasing = T)
+        
+        set.seed(rea)
+        train_table1 <- dat1_sub[sample(1:nrow(dat1_sub), size = unique(features_sub$frac)[i] * ncol(dat1_sub)),]
+        train_table2 <- dat1_sub[sample(1:nrow(dat1_sub), size = unique(features_sub$frac)[j] * ncol(dat1_sub)),]
+        
+        data_rich <- data.frame(species=colnames(train_table1),richness1=colSums(train_table1>0)/nrow(train_table1),
+                                richness2=colSums(train_table2>0)/nrow(train_table2))
+        
+        g3 <- features_sub$MeanDecreaseGini[i1] *  as.numeric(data_rich$richness1[match(features_sub$Feature[i1],data_rich$species)])^2.5
+        g4 <- features_sub$MeanDecreaseGini[i2] *  as.numeric(data_rich$richness2[match(features_sub$Feature[i2],data_rich$species)])^2.5
+        
+        a3 <- features_sub$MeanDecreaseAccuracy[i1] *  (data_rich$richness1[match(features_sub$Feature[i1],data_rich$species)])^2.5
+        a4 <- features_sub$MeanDecreaseAccuracy[i2] *  (data_rich$richness2[match(features_sub$Feature[i2],data_rich$species)])^2.5
+        
+        sorted_indicesg3 <- order(g3,decreasing = T)
+        sorted_indicesg4 <- order(g4,decreasing = T)
+        
+        sorted_indicesa3 <- order(a3,decreasing = T)
+        sorted_indicesa4 <- order(a4,decreasing = T)
+        
+        top_n = floor(0.1*length(g1))
+        
+        overlap_matrix1[i,j] <- overlap_matrix1[i,j] + length(intersect(sorted_indicesg1[1:top_n],sorted_indicesg2[1:top_n]))/top_n
+        overlap_matrix2[i,j] <- overlap_matrix2[i,j] + length(intersect(sorted_indicesa1[1:top_n],sorted_indicesa2[1:top_n]))/top_n
+        overlap_matrix3[i,j] <- overlap_matrix3[i,j] + length(intersect(sorted_indicesg3[1:top_n],sorted_indicesg4[1:top_n]))/top_n
+        overlap_matrix4[i,j] <- overlap_matrix4[i,j] + length(intersect(sorted_indicesa3[1:top_n],sorted_indicesa4[1:top_n]))/top_n
+      }
+    }
+  }
+  overlap_matrix1 <- overlap_matrix1 / 10
+  overlap_matrix2 <- overlap_matrix2 / 10
+  overlap_matrix3 <- overlap_matrix3 / 10
+  overlap_matrix4 <- overlap_matrix4 / 10
+  
+  diag(overlap_matrix1) <- NA
+  diag(overlap_matrix2) <- NA
+  diag(overlap_matrix3) <- NA
+  diag(overlap_matrix4) <- NA
+  
+  rownames(overlap_matrix1) <- unique(features$frac)
+  colnames(overlap_matrix1) <- unique(features$frac)
+  
+  rownames(overlap_matrix2) <- unique(features$frac)
+  colnames(overlap_matrix2) <- unique(features$frac)
+  
+  rownames(overlap_matrix3) <- unique(features$frac)
+  colnames(overlap_matrix3) <- unique(features$frac)
+  
+  rownames(overlap_matrix4) <- unique(features$frac)
+  colnames(overlap_matrix4) <- unique(features$frac)
+  
+  overlap_means1 <- apply(overlap_matrix1, 1, function(x) mean(x, na.rm = TRUE))
+  overlap_means2 <- apply(overlap_matrix2, 1, function(x) mean(x, na.rm = TRUE))
+  overlap_means3 <- apply(overlap_matrix3, 1, function(x) mean(x, na.rm = TRUE))
+  overlap_means4 <- apply(overlap_matrix4, 1, function(x) mean(x, na.rm = TRUE))
+  
+  overlap_sd1 <- apply(overlap_matrix1, 1, function(x) sd(x, na.rm = TRUE))
+  overlap_sd2 <- apply(overlap_matrix2, 1, function(x) sd(x, na.rm = TRUE))
+  overlap_sd3 <- apply(overlap_matrix3, 1, function(x) sd(x, na.rm = TRUE))
+  overlap_sd4 <- apply(overlap_matrix4, 1, function(x) sd(x, na.rm = TRUE))
+  
+  dat1 <- data.frame(sample_fraction = rep(rownames(overlap_matrix1),2),Overlap = c(overlap_means1,overlap_means2,overlap_means3,overlap_means4),
+                     sds = c(overlap_sd1/3,overlap_sd2/3,overlap_sd3/3,overlap_sd4/3),
+                     types=c(rep("Gini_o",10),rep("MeanAccuracy_o",10),rep("Gini_i",10),rep("MeanAccuracy_i",10)))
+  
+  dat1$sample_fraction <- as.numeric(dat1$sample_fraction)
+  
+  pdf1[[index]] <- ggplot(dat1, aes(sample_fraction, Overlap)) +
+    geom_line(aes(group=types,color=types),linetype = "dotdash",size=0.4) +geom_point(aes(color=types,shape=types),size=2.5) +
+    geom_errorbar(aes(ymin = Overlap - sds, ymax = Overlap + sds,color=types), width = 0.02) +
+    scale_color_manual(values = c("#DD5129FF","#DD5129FF","#0F7BA2FF", "#0F7BA2FF"))+scale_shape_manual(values = c(16,21,16,21))+
+    theme_bw()+xlab("")+ylab("")+labs(title = paste("Fraction of spiking-in:", ffs))+
+    theme(
+      plot.title = element_text(hjust = 0.5, size = 8),
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      strip.text = element_text(face = "bold.italic", size = 10),
+      strip.background = element_blank(),
+      axis.text.x = element_text(size = 8,color = 'black'),
+      axis.text.y = element_text(size = 8,color = 'black'),
+      #strip.text.x = element_blank(),
+      axis.ticks = element_line(size = 0.2),
+      legend.position = "none")
+  
+  index <- index + 1
+}
+
+pdf1[[1]] <- pdf1[[1]] + ylab("Frequency")
+
+p1 = do.call(ggarrange, c(pdf1, list(labels = c("a", "b", "c"),ncol = 3, nrow = 1),align="hv"))
+
+features <- read.csv(file = "../results/Simulated0.05_features.csv")
+ngroup <-  length(unique(features$frac))
+pdf1 <- list()
+index <- 1
+for (ffs in c(0.05,0.1,0.2)){
+  dat1_sub <- read.csv(file = paste("../data/Stool0.05_f_",2,'_',ffs,'.csv',sep = ""),row.names = 1, header = T)
+  
+  overlap_matrix1 <- matrix(0, nrow = ngroup,ncol=ngroup)
+  overlap_matrix2 <- matrix(0,nrow = ngroup,ncol=ngroup)
+  overlap_matrix3 <- matrix(0, nrow = ngroup,ncol=ngroup)
+  overlap_matrix4 <- matrix(0,nrow = ngroup,ncol=ngroup)
+  
+  for (rea in 1:10){
+    for (i in 1:ngroup){
+      for (j in 1:ngroup){
+        features_sub <- features[features$rea==rea & features$ff==ffs,]
+        i1 <- features_sub$frac == unique(features_sub$frac)[i]
+        i2 <- features_sub$frac == unique(features_sub$frac)[j]
+        
+        g1 <-  features_sub$MeanDecreaseGini[i1]
+        g2 <-  features_sub$MeanDecreaseGini[i2]
+        
+        a1 <-  features_sub$MeanDecreaseAccuracy[i1]
+        a2 <-  features_sub$MeanDecreaseAccuracy[i2]
+        
+        sorted_indicesg1 <- order(g1,decreasing = T)
+        sorted_indicesg2 <- order(g2,decreasing = T)
+        
+        sorted_indicesa1 <- order(a1,decreasing = T)
+        sorted_indicesa2 <- order(a2,decreasing = T)
+        
+        set.seed(rea)
+        train_table1 <- dat1_sub[sample(1:nrow(dat1_sub), size = unique(features_sub$frac)[i] * ncol(dat1_sub)),]
+        train_table2 <- dat1_sub[sample(1:nrow(dat1_sub), size = unique(features_sub$frac)[j] * ncol(dat1_sub)),]
+        
+        data_rich <- data.frame(species=colnames(train_table1),richness1=colSums(train_table1>0)/nrow(train_table1),
+                                richness2=colSums(train_table2>0)/nrow(train_table2))
+        
+        g3 <- features_sub$MeanDecreaseGini[i1] *  as.numeric(data_rich$richness1[match(features_sub$Feature[i1],data_rich$species)])^2.5
+        g4 <- features_sub$MeanDecreaseGini[i2] *  as.numeric(data_rich$richness2[match(features_sub$Feature[i2],data_rich$species)])^2.5
+        
+        a3 <- features_sub$MeanDecreaseAccuracy[i1] *  (data_rich$richness1[match(features_sub$Feature[i1],data_rich$species)])^2.5
+        a4 <- features_sub$MeanDecreaseAccuracy[i2] *  (data_rich$richness2[match(features_sub$Feature[i2],data_rich$species)])^2.5
+        
+        sorted_indicesg3 <- order(g3,decreasing = T)
+        sorted_indicesg4 <- order(g4,decreasing = T)
+        
+        sorted_indicesa3 <- order(a3,decreasing = T)
+        sorted_indicesa4 <- order(a4,decreasing = T)
+        
+        top_n = floor(0.1*length(g1))
+        
+        overlap_matrix1[i,j] <- overlap_matrix1[i,j] + length(intersect(sorted_indicesg1[1:top_n],sorted_indicesg2[1:top_n]))/top_n
+        overlap_matrix2[i,j] <- overlap_matrix2[i,j] + length(intersect(sorted_indicesa1[1:top_n],sorted_indicesa2[1:top_n]))/top_n
+        overlap_matrix3[i,j] <- overlap_matrix3[i,j] + length(intersect(sorted_indicesg3[1:top_n],sorted_indicesg4[1:top_n]))/top_n
+        overlap_matrix4[i,j] <- overlap_matrix4[i,j] + length(intersect(sorted_indicesa3[1:top_n],sorted_indicesa4[1:top_n]))/top_n
+      }
+    }
+  }
+  overlap_matrix1 <- overlap_matrix1 / 10
+  overlap_matrix2 <- overlap_matrix2 / 10
+  overlap_matrix3 <- overlap_matrix3 / 10
+  overlap_matrix4 <- overlap_matrix4 / 10
+  
+  diag(overlap_matrix1) <- NA
+  diag(overlap_matrix2) <- NA
+  diag(overlap_matrix3) <- NA
+  diag(overlap_matrix4) <- NA
+  
+  rownames(overlap_matrix1) <- unique(features$frac)
+  colnames(overlap_matrix1) <- unique(features$frac)
+  
+  rownames(overlap_matrix2) <- unique(features$frac)
+  colnames(overlap_matrix2) <- unique(features$frac)
+  
+  rownames(overlap_matrix3) <- unique(features$frac)
+  colnames(overlap_matrix3) <- unique(features$frac)
+  
+  rownames(overlap_matrix4) <- unique(features$frac)
+  colnames(overlap_matrix4) <- unique(features$frac)
+  
+  overlap_means1 <- apply(overlap_matrix1, 1, function(x) mean(x, na.rm = TRUE))
+  overlap_means2 <- apply(overlap_matrix2, 1, function(x) mean(x, na.rm = TRUE))
+  overlap_means3 <- apply(overlap_matrix3, 1, function(x) mean(x, na.rm = TRUE))
+  overlap_means4 <- apply(overlap_matrix4, 1, function(x) mean(x, na.rm = TRUE))
+  
+  overlap_sd1 <- apply(overlap_matrix1, 1, function(x) sd(x, na.rm = TRUE))
+  overlap_sd2 <- apply(overlap_matrix2, 1, function(x) sd(x, na.rm = TRUE))
+  overlap_sd3 <- apply(overlap_matrix3, 1, function(x) sd(x, na.rm = TRUE))
+  overlap_sd4 <- apply(overlap_matrix4, 1, function(x) sd(x, na.rm = TRUE))
+  
+  dat1 <- data.frame(sample_fraction = rep(rownames(overlap_matrix1),2),Overlap = c(overlap_means1,overlap_means2,overlap_means3,overlap_means4),
+                     sds = c(overlap_sd1,overlap_sd2,overlap_sd3,overlap_sd4),
+                     types=c(rep("Gini_o",10),rep("MeanAccuracy_o",10),rep("Gini_i",10),rep("MeanAccuracy_i",10)))
+  
+  dat1$sample_fraction <- as.numeric(dat1$sample_fraction)
+  
+  pdf1[[index]] <-  ggplot(dat1, aes(sample_fraction, Overlap)) +
+    geom_line(aes(group=types,color=types),size=0.4,linetype = "dotdash") +geom_point(aes(color=types,shape=types),size=2.5) +
+    geom_errorbar(aes(ymin = Overlap - sds, ymax = Overlap + sds,color=types), width = 0.02) +
+    scale_color_manual(values = c("#DD5129FF","#DD5129FF","#0F7BA2FF", "#0F7BA2FF"))+scale_shape_manual(values = c(16,21,16,21))+
+    theme_bw()+xlab("")+ylab("")+
+    theme(
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      strip.text = element_text(face = "bold.italic", size = 10),
+      strip.background = element_blank(),
+      axis.text.x = element_text(size = 8,color = 'black'),
+      axis.text.y = element_text(size = 8,color = 'black'),
+      #strip.text.x = element_blank(),
+      axis.ticks = element_line(size = 0.2),
+      legend.position = "none")
+  
+  index <- index + 1
+}
+
+pdf1[[1]] <- pdf1[[1]] + ylab("Frequency")
+
+p2 = do.call(ggarrange, c(pdf1, list(labels = c("d", "e", "f"),ncol = 3, nrow = 1),align="hv"))
+
+features <- read.csv(file = "../results/Simulated0.2_features.csv")
+ngroup <-  length(unique(features$frac))
+pdf1 <- list()
+index <- 1
+for (ffs in c(0.05,0.1,0.2)){
+  dat1_sub <- read.csv(file = paste("../data/Stool0.2_f_",2,'_',ffs,'.csv',sep = ""),row.names = 1, header = T)
+  
+  overlap_matrix1 <- matrix(0, nrow = ngroup,ncol=ngroup)
+  overlap_matrix2 <- matrix(0,nrow = ngroup,ncol=ngroup)
+  overlap_matrix3 <- matrix(0, nrow = ngroup,ncol=ngroup)
+  overlap_matrix4 <- matrix(0,nrow = ngroup,ncol=ngroup)
+  
+  for (rea in 1:10){
+    for (i in 1:ngroup){
+      for (j in 1:ngroup){
+        features_sub <- features[features$rea==rea & features$ff==ffs,]
+        i1 <- features_sub$frac == unique(features_sub$frac)[i]
+        i2 <- features_sub$frac == unique(features_sub$frac)[j]
+        
+        g1 <-  features_sub$MeanDecreaseGini[i1]
+        g2 <-  features_sub$MeanDecreaseGini[i2]
+        
+        a1 <-  features_sub$MeanDecreaseAccuracy[i1]
+        a2 <-  features_sub$MeanDecreaseAccuracy[i2]
+        
+        sorted_indicesg1 <- order(g1,decreasing = T)
+        sorted_indicesg2 <- order(g2,decreasing = T)
+        
+        sorted_indicesa1 <- order(a1,decreasing = T)
+        sorted_indicesa2 <- order(a2,decreasing = T)
+        
+        set.seed(rea)
+        train_table1 <- dat1_sub[sample(1:nrow(dat1_sub), size = unique(features_sub$frac)[i] * ncol(dat1_sub)),]
+        train_table2 <- dat1_sub[sample(1:nrow(dat1_sub), size = unique(features_sub$frac)[j] * ncol(dat1_sub)),]
+        
+        data_rich <- data.frame(species=colnames(train_table1),richness1=colSums(train_table1>0)/nrow(train_table1),
+                                richness2=colSums(train_table2>0)/nrow(train_table2))
+        
+        g3 <- features_sub$MeanDecreaseGini[i1] *  (as.numeric(data_rich$richness1[match(features_sub$Feature[i1],data_rich$species)]))^2.5
+        g4 <- features_sub$MeanDecreaseGini[i2] *  (as.numeric(data_rich$richness2[match(features_sub$Feature[i2],data_rich$species)]))^2.5
+        
+        a3 <- features_sub$MeanDecreaseAccuracy[i1] *  (data_rich$richness1[match(features_sub$Feature[i1],data_rich$species)])^2.5
+        a4 <- features_sub$MeanDecreaseAccuracy[i2] *  (data_rich$richness2[match(features_sub$Feature[i2],data_rich$species)])^2.5
+        
+        sorted_indicesg3 <- order(g3,decreasing = T)
+        sorted_indicesg4 <- order(g4,decreasing = T)
+        
+        sorted_indicesa3 <- order(a3,decreasing = T)
+        sorted_indicesa4 <- order(a4,decreasing = T)
+        
+        top_n = floor(0.1*length(g1))
+        
+        overlap_matrix1[i,j] <- overlap_matrix1[i,j] + length(intersect(sorted_indicesg1[1:top_n],sorted_indicesg2[1:top_n]))/top_n
+        overlap_matrix2[i,j] <- overlap_matrix2[i,j] + length(intersect(sorted_indicesa1[1:top_n],sorted_indicesa2[1:top_n]))/top_n
+        overlap_matrix3[i,j] <- overlap_matrix3[i,j] + length(intersect(sorted_indicesg3[1:top_n],sorted_indicesg4[1:top_n]))/top_n
+        overlap_matrix4[i,j] <- overlap_matrix4[i,j] + length(intersect(sorted_indicesa3[1:top_n],sorted_indicesa4[1:top_n]))/top_n
+      }
+    }
+  }
+  overlap_matrix1 <- overlap_matrix1 / 10
+  overlap_matrix2 <- overlap_matrix2 / 10
+  overlap_matrix3 <- overlap_matrix3 / 10
+  overlap_matrix4 <- overlap_matrix4 / 10
+  
+  diag(overlap_matrix1) <- NA
+  diag(overlap_matrix2) <- NA
+  diag(overlap_matrix3) <- NA
+  diag(overlap_matrix4) <- NA
+  
+  rownames(overlap_matrix1) <- unique(features$frac)
+  colnames(overlap_matrix1) <- unique(features$frac)
+  
+  rownames(overlap_matrix2) <- unique(features$frac)
+  colnames(overlap_matrix2) <- unique(features$frac)
+  
+  rownames(overlap_matrix3) <- unique(features$frac)
+  colnames(overlap_matrix3) <- unique(features$frac)
+  
+  rownames(overlap_matrix4) <- unique(features$frac)
+  colnames(overlap_matrix4) <- unique(features$frac)
+  
+  overlap_means1 <- apply(overlap_matrix1, 1, function(x) mean(x, na.rm = TRUE))
+  overlap_means2 <- apply(overlap_matrix2, 1, function(x) mean(x, na.rm = TRUE))
+  overlap_means3 <- apply(overlap_matrix3, 1, function(x) mean(x, na.rm = TRUE))
+  overlap_means4 <- apply(overlap_matrix4, 1, function(x) mean(x, na.rm = TRUE))
+  
+  overlap_sd1 <- apply(overlap_matrix1, 1, function(x) sd(x, na.rm = TRUE))
+  overlap_sd2 <- apply(overlap_matrix2, 1, function(x) sd(x, na.rm = TRUE))
+  overlap_sd3 <- apply(overlap_matrix3, 1, function(x) sd(x, na.rm = TRUE))
+  overlap_sd4 <- apply(overlap_matrix4, 1, function(x) sd(x, na.rm = TRUE))
+  
+  dat1 <- data.frame(sample_fraction = rep(rownames(overlap_matrix1),2),Overlap = c(overlap_means1,overlap_means2,overlap_means3,overlap_means4),
+                     sds = c(overlap_sd1,overlap_sd2,overlap_sd3,overlap_sd4),
+                     types=c(rep("Gini_o",10),rep("MeanAccuracy_o",10),rep("Gini_i",10),rep("MeanAccuracy_i",10)))
+  
+  dat1$sample_fraction <- as.numeric(dat1$sample_fraction)
+  
+  pdf1[[index]] <-  ggplot(dat1, aes(sample_fraction, Overlap)) +
+    geom_line(aes(group=types,color=types),linetype = "dotdash",size=0.4) +geom_point(aes(color=types,shape=types),size=2.5) +
+    geom_errorbar(aes(ymin = Overlap - sds, ymax = Overlap + sds,color=types), width = 0.02) +
+    scale_color_manual(values = c("#DD5129FF","#DD5129FF","#0F7BA2FF", "#0F7BA2FF"))+scale_shape_manual(values = c(16,21,16,21))+
+    theme_bw()+xlab("Sample Size")+ylab("")+
+    theme(
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      strip.text = element_text(face = "bold.italic", size = 10),
+      strip.background = element_blank(),
+      axis.text.x = element_text(size = 8,color = 'black'),
+      axis.text.y = element_text(size = 8,color = 'black'),
+      #strip.text.x = element_blank(),
+      axis.ticks = element_line(size = 0.2),
+      legend.position = "none")
+  
+  index <- index + 1
+}
+
+pdf1[[1]] <- pdf1[[1]] + ylab("Frequency")
+
+p3 = do.call(ggarrange, c(pdf1, list(labels = c("g", "h", "i"),ncol = 3, nrow = 1),align="hv"))
+
+p4 = ggarrange(p1,p2,p3,ncol = 1,nrow=3,align = "hv")
+
+label1 <- text_grob("Effect size = 0.01", rot = 90, size = 10, just = "center")
+label2 <- text_grob("Effect size = 0.05", rot = 90, size = 10, just = "center")
+label3 <- text_grob("Effect size = 0.20", rot = 90, size = 10, just = "center")
+
+row1 <- arrangeGrob(label1, p1, ncol = 2, widths = c(0.08, 1))
+row2 <- arrangeGrob(label2, p2, ncol = 2, widths = c(0.08, 1))
+row3 <- arrangeGrob(label3, p3, ncol = 2, widths = c(0.08, 1))
+
+p_body <- arrangeGrob(row1, row2, row3, ncol = 1)
+
+type_levels <- c("Gini_i", "Gini_o", "MeanAccuracy_i", "MeanAccuracy_o")
+
+type_labels <- c(
+  Gini_i = "Gini impurity (ParSlet)",
+  Gini_o = "Gini impurity (Original)",
+  MeanAccuracy_i = "Mean accuracy decrease (ParSlet)", 
+  MeanAccuracy_o = "Mean accuracy decrease (Original)"
+)
+
+col_vals <- c(
+  Gini_o = "#DD5129FF",
+  Gini_i = "#DD5129FF",
+  MeanAccuracy_o = "#0F7BA2FF",
+  MeanAccuracy_i = "#0F7BA2FF"
+)
+
+shape_vals <- c(
+  Gini_o         = 1,  
+  MeanAccuracy_o = 1,   
+  Gini_i         = 16, 
+  MeanAccuracy_i = 16   
+)
+
+type_labels <- c(
+  Gini_o = "Gini impurity (Original)",
+  MeanAccuracy_o = "Mean accuracy decrease (Original)",
+  Gini_i = "Gini impurity (ParSlet)",
+  MeanAccuracy_i = "Mean accuracy decrease (ParSlet)"
+)
+
+legend_df <- data.frame(
+  x = 1, y = 1,
+  types = factor(type_levels, levels = type_levels)
+)
+
+legend_plot <- ggplot(legend_df, aes(x = x, y = y, color = types, shape = types)) +
+  geom_point(size = 3) +
+  scale_color_manual(values = col_vals, breaks = type_levels, labels = type_labels, drop = FALSE) +
+  scale_shape_manual(values = shape_vals, breaks = type_levels, labels = type_labels, drop = FALSE) +
+  guides(
+    color = guide_legend(ncol = 2, override.aes = list(size = 4)),
+    shape = guide_legend(ncol = 2)
+  ) +
+  theme_void() +
+  theme(
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    legend.text = element_text(size = 10)
+  )
+
+legend_grob <- get_legend(legend_plot)
+
+final_plot <- ggarrange(p_body, legend_grob, ncol = 1, heights = c(1, 0.1))
+print(final_plot)
+
+ggsave("/Users/yrx/Downloads/png/Fig4.png", plot = final_plot, width=7.2, height=7.7, dpi = 1200)
+
+```
+
+### Figure 5 
+
+```{r}
+library(reshape2)
+library(ggpubr)
+library(unikn) 
+library(cowplot)
+
+setwd("/Users/yrx/Downloads/FeatureSelection/feature_selection/code")
+
+features <- read.csv(file = "../results/Real_feautures_filter.csv")
+
+pdf1 = list()
+pdf2 = list()
+index = 1
+
+for (ffs in unique(features$ff)){
+  ngroup <-  length(unique(features$frac[features$ff==ffs]))
+  print(ngroup)
+  dat1_sub <- read.csv(file = paste("../data/",ffs,sep = ""))
+  
+  if (ngroup==10){
+    overlap_matrix1 <- matrix(0, nrow = ngroup,ncol=ngroup)
+    overlap_matrix2 <- matrix(0,nrow = ngroup,ncol=ngroup)
+    overlap_matrix3 <- matrix(0, nrow = ngroup,ncol=ngroup)
+    overlap_matrix4 <- matrix(0,nrow = ngroup,ncol=ngroup)
+    
+    for (rea in 1:10){
+      for (i in 1:ngroup){
+        for (j in 1:ngroup){
+          features_sub <- features[features$rea==rea & features$ff==ffs,]
+          i1 <- features_sub$frac == unique(features_sub$frac)[i]
+          i2 <- features_sub$frac == unique(features_sub$frac)[j]
+          
+          g1 <-  features_sub$MeanDecreaseGini[i1]
+          g2 <-  features_sub$MeanDecreaseGini[i2]
+          
+          a1 <-  features_sub$MeanDecreaseAccuracy[i1]
+          a2 <-  features_sub$MeanDecreaseAccuracy[i2]
+          
+          sorted_indicesg1 <- order(g1,decreasing = T)
+          sorted_indicesg2 <- order(g2,decreasing = T)
+          
+          sorted_indicesa1 <- order(a1,decreasing = T)
+          sorted_indicesa2 <- order(a2,decreasing = T)
+          
+          set.seed(rea)
+          train_table1 <- dat1_sub[sample(1:nrow(dat1_sub), size = unique(features_sub$frac)[i] * ncol(dat1_sub)),]
+          train_table2 <- dat1_sub[sample(1:nrow(dat1_sub), size = unique(features_sub$frac)[j] * ncol(dat1_sub)),]
+          
+          data_rich <- data.frame(species=colnames(train_table1),richness1=colSums(train_table1>0)/nrow(train_table1),
+                                  richness2=colSums(train_table2>0)/nrow(train_table2))
+          
+          g3 <- features_sub$MeanDecreaseGini[i1] *  as.numeric(data_rich$richness1[match(features_sub$Feature[i1],data_rich$species)])^2.5
+          g4 <- features_sub$MeanDecreaseGini[i2] *  as.numeric(data_rich$richness2[match(features_sub$Feature[i2],data_rich$species)])^2.5
+          
+          a3 <- features_sub$MeanDecreaseAccuracy[i1] *  (data_rich$richness1[match(features_sub$Feature[i1],data_rich$species)])^2.5
+          a4 <- features_sub$MeanDecreaseAccuracy[i2] *  (data_rich$richness2[match(features_sub$Feature[i2],data_rich$species)])^2.5
+          
+          sorted_indicesg3 <- order(g3,decreasing = T)
+          sorted_indicesg4 <- order(g4,decreasing = T)
+          
+          sorted_indicesa3 <- order(a3,decreasing = T)
+          sorted_indicesa4 <- order(a4,decreasing = T)
+          
+          top_n = floor(0.1*length(g1))
+          
+          overlap_matrix1[i,j] <- overlap_matrix1[i,j] + length(intersect(sorted_indicesg1[1:top_n],sorted_indicesg2[1:top_n]))/top_n
+          overlap_matrix2[i,j] <- overlap_matrix2[i,j] + length(intersect(sorted_indicesa1[1:top_n],sorted_indicesa2[1:top_n]))/top_n
+          overlap_matrix3[i,j] <- overlap_matrix3[i,j] + length(intersect(sorted_indicesg3[1:top_n],sorted_indicesg4[1:top_n]))/top_n
+          overlap_matrix4[i,j] <- overlap_matrix4[i,j] + length(intersect(sorted_indicesa3[1:top_n],sorted_indicesa4[1:top_n]))/top_n
+        }
+      }
+    }
+    overlap_matrix1 <- overlap_matrix1 / 10
+    overlap_matrix2 <- overlap_matrix2 / 10
+    overlap_matrix3 <- overlap_matrix3 / 10
+    overlap_matrix4 <- overlap_matrix4 / 10
+    
+    diag(overlap_matrix1) <- NA
+    diag(overlap_matrix2) <- NA
+    diag(overlap_matrix3) <- NA
+    diag(overlap_matrix4) <- NA
+    
+    rownames(overlap_matrix1) <- unique(features_sub$frac)
+    colnames(overlap_matrix1) <- unique(features_sub$frac)
+    
+    rownames(overlap_matrix2) <- unique(features_sub$frac)
+    colnames(overlap_matrix2) <- unique(features_sub$frac)
+    
+    rownames(overlap_matrix3) <- unique(features_sub$frac)
+    colnames(overlap_matrix3) <- unique(features_sub$frac)
+    
+    rownames(overlap_matrix4) <- unique(features_sub$frac)
+    colnames(overlap_matrix4) <- unique(features_sub$frac)
+    
+    overlap_means1 <- apply(overlap_matrix1, 1, function(x) mean(x, na.rm = TRUE))
+    overlap_means2 <- apply(overlap_matrix2, 1, function(x) mean(x, na.rm = TRUE))
+    overlap_means3 <- apply(overlap_matrix3, 1, function(x) mean(x, na.rm = TRUE))
+    overlap_means4 <- apply(overlap_matrix4, 1, function(x) mean(x, na.rm = TRUE))
+    
+    overlap_sd1 <- apply(overlap_matrix1, 1, function(x) sd(x, na.rm = TRUE))
+    overlap_sd2 <- apply(overlap_matrix2, 1, function(x) sd(x, na.rm = TRUE))
+    overlap_sd3 <- apply(overlap_matrix3, 1, function(x) sd(x, na.rm = TRUE))
+    overlap_sd4 <- apply(overlap_matrix4, 1, function(x) sd(x, na.rm = TRUE))
+    
+    dat1 <- data.frame(sample_fraction = rep(rownames(overlap_matrix1),2),Overlap = c(overlap_means1,overlap_means2,overlap_means3,overlap_means4),
+                       sds = c(overlap_sd1/sqrt(9),overlap_sd2/sqrt(9),overlap_sd3/sqrt(9),overlap_sd4/sqrt(9)),
+                       types=c(rep("Gini_o",10),rep("MeanAccuracy_o",10),rep("Gini_i",10),rep("MeanAccuracy_i",10)))
+    
+    dat1$sample_fraction <- as.numeric(dat1$sample_fraction)
+    
+    pdf1[[index]] <- ggplot(dat1, aes(sample_fraction, Overlap)) +
+      geom_line(aes(group=types, color=types), linetype = "dotdash", size=0.4) +
+      geom_point(aes(color=types, shape=types), size=2.5) +
+      geom_errorbar(aes(ymin = Overlap - sds, ymax = Overlap + sds, color=types), width = 0.02) +
+      scale_color_manual(values = c("#DD5129FF", "#DD5129FF", "#0F7BA2FF", "#0F7BA2FF")) +
+      scale_shape_manual(values = c(16, 21, 16, 21)) +
+      theme_bw() + 
+      xlab("Sample size") + 
+      ylab("Overlap") + 
+      labs(title = ffs) +
+      theme(
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        plot.title = element_text(hjust = 0.5, size = 8, face = "bold"), 
+        strip.text = element_text(face = "bold.italic", size = 10),
+        strip.background = element_blank(),
+        axis.text.x = element_text(size = 8, color = 'black'),
+        axis.text.y = element_text(size = 8, color = 'black'),
+        axis.ticks = element_line(size = 0.2),
+        legend.position = "none"
+      )
+    
+    index = index + 1
+  }
+}
+
+p1 = do.call(ggarrange, c(pdf1, list(ncol = 5, nrow = 2),align="hv"))
+print(p1)
+
+p_main <- do.call(ggarrange, c(pdf1, list(ncol = 5, nrow = 2, align = "hv")))
+
+type_levels <- c("Gini_i", "Gini_o", "MeanAccuracy_i", "MeanAccuracy_o")
+
+type_labels <- c(
+  Gini_i = "Gini impurity (ParSlet)",
+  Gini_o = "Gini impurity (Original)",
+  MeanAccuracy_i = "Mean accuracy decrease (ParSlet)", 
+  MeanAccuracy_o = "Mean accuracy decrease (Original)"
+)
+
+col_vals <- c(
+  Gini_o = "#DD5129FF",
+  Gini_i = "#DD5129FF",
+  MeanAccuracy_o = "#0F7BA2FF",
+  MeanAccuracy_i = "#0F7BA2FF"
+)
+
+shape_vals <- c(
+  Gini_o = 1,  
+  MeanAccuracy_o = 1,   
+  Gini_i = 16, 
+  MeanAccuracy_i = 16   
+)
+
+type_labels <- c(
+  Gini_o = "Gini impurity (Original)",
+  MeanAccuracy_o = "Mean accuracy decrease (Original)",
+  Gini_i = "Gini impurity (ParSlet)",
+  MeanAccuracy_i = "Mean accuracy decrease (ParSlet)"
+)
+
+legend_df <- data.frame(
+  x = 1, y = 1,
+  types = factor(type_levels, levels = type_levels)
+)
+
+legend_plot <- ggplot(legend_df, aes(x = x, y = y, color = types, shape = types)) +
+  geom_point(size = 3) +
+  scale_color_manual(values = col_vals, breaks = type_levels, labels = type_labels, drop = FALSE) +
+  scale_shape_manual(values = shape_vals, breaks = type_levels, labels = type_labels, drop = FALSE) +
+  guides(
+    color = guide_legend(ncol = 2, override.aes = list(size = 4)),
+    shape = guide_legend(ncol = 2)
+  ) +
+  theme_void() +
+  theme(
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    legend.text = element_text(size = 10)
+  )
+
+legend_grob <- get_legend(legend_plot)
+
+final_plot <- plot_grid(
+  p_main, 
+  legend_grob, 
+  ncol = 1, 
+  rel_heights = c(1, 0.1)
+)
+print(final_plot)
+```
+
+### Figure 6 
+
+```{r}
+# Curated Metagenomic Data 
+
+library(curatedMetagenomicData)
+library(dplyr)
+library(DT)
+library(randomForest)
+
+taxa_table <- curatedMetagenomicData(pattern = "relative_abundance", dryrun = FALSE)
+
+merged_taxa_table <- mergeData(taxa_table)
+
+abundance_matrix <- assay(merged_taxa_table, "relative_abundance")
+taxonomy_info <- rowData(merged_taxa_table)
+
+# Create a taxonomic profile
+taxonomic_profile <- data.frame(TaxonID = rownames(abundance_matrix), 
+                                taxonomy_info, 
+                                abundance_matrix)
+
+sampleMetadata <- curatedMetagenomicData::sampleMetadata
+
+sampleMetadata_sub <- sampleMetadata[sampleMetadata$disease%in%c("healthy","IBD", "CRC", "T2D", "RA","ACVD", "adenoma", "IGT"),]
+
+freqs <- (table(sampleMetadata_sub$study_name,sampleMetadata_sub$disease))
+freqs_df <- as.data.frame.matrix(freqs)
+freqs_df <- freqs_df[rowSums(freqs_df>0)>=2,]
+
+
+# CRC: c("FengQ_2015","GuptaA_2019","HanniganGD_2017")
+# IBD: c("HallAB_2017","HMP_2019_ibdmdb","IjazUZ_2017","NielsenHB_2014")
+# T2D: c("QinJ_2012","MetaCardis_2020_a","KarlssonFH_2013","SankaranarayananK_2015")
+# adenoma: c("HanniganGD_2017","ThomasAM_2018a","YachidaS_2019","ZellerG_2014")
+# IGT: c("KarlssonFH_2013","MetaCardis_2020_a","HMP_2019_t2d")
+
+all_study <- c("FengQ_2015","GuptaA_2019","HanniganGD_2017","HallAB_2017","HMP_2019_ibdmdb","IjazUZ_2017","NielsenHB_2014", "QinJ_2012","MetaCardis_2020_a","KarlssonFH_2013","SankaranarayananK_2015", "HanniganGD_2017","ThomasAM_2018a","YachidaS_2019","ZellerG_2014", "KarlssonFH_2013","MetaCardis_2020_a","HMP_2019_t2d")
+
+
+sampleMetadata_sub1 <- sampleMetadata_sub[sampleMetadata_sub$study_name%in%all_study,]
+rownames(sampleMetadata_sub1) <- sampleMetadata_sub1$sample_id
+overlaps <- intersect(colnames(taxonomic_profile),rownames(sampleMetadata_sub1))
+sampleMetadata_sub1 <- sampleMetadata_sub1[overlaps,]
+taxonomic_profile_sub <- taxonomic_profile[,overlaps] 
+rownames(taxonomic_profile_sub) <- sub(".*s__", "", rownames(taxonomic_profile_sub))
+
+features = NULL
+for (study in unique(sampleMetadata_sub1$study_name)){
+  for (phenotype in c("adenoma",  "CRC",  "IBD",  "IGT",  "T2D")){
+    s1 <- which(sampleMetadata_sub1$study_name==study & sampleMetadata_sub1$disease == phenotype)
+    s2 <- which(sampleMetadata_sub1$study_name==study & sampleMetadata_sub1$disease == "healthy")
+    if ((length(s1)>0) & (length(s2)>0)){
+      dat1_sub <- cbind(taxonomic_profile_sub[,s1],taxonomic_profile_sub[,s2])
+      dat1_sub <- as.data.frame(t(dat1_sub))
+      
+      richness <- colSums(dat1_sub>0)
+      dat1_sub$status <- c(rep(phenotype,length(s1)),rep("healthy",length(s2)))
+      
+      dat1_sub$status <- factor(dat1_sub$status)
+      train_data <- dat1_sub
+      rf_model <- randomForest(
+        status ~ .,
+        data = train_data,
+        importance = TRUE,
+        probability = TRUE
+      )
+      importance_data <- as.data.frame(importance(rf_model))
+      importance_data$Feature <- rownames(importance_data)
+      
+      importance_data = importance_data[,3:5]
+      importance_data$study = study
+      importance_data$phenotype = phenotype
+      importance_data$richness = richness
+      features = rbind(features,importance_data)
+    }
+  }
+}
+
+# write.csv(features,file = "Curated_feautures.csv",row.names = F)
+
+# Figure 6 
+
+library(ggplot2)
+library(randomForest)
+library(pROC)
+library(dplyr)
+library(tidyr)
+library(reshape2)
+library(ggpubr)
+library(unikn) 
+library(gridExtra)
+
+setwd("/Users/yrx/Downloads/FeatureSelection/feature_selection/code")
+
+features <- read.csv(file = "../results/Curated_feautures.csv")
+dat_features = NULL
+
+for (threshold in seq(0.02,0.2,by=0.02)){
+  for (phenotype in unique(features$phenotype)){
+    dat1_sub <- features[features$phenotype==phenotype,]
+    taxa_1 = c()
+    taxa_2 = c()
+    taxa_3 = c()
+    for (study1 in unique(dat1_sub$study)){
+      i1 <- dat1_sub$study == study1
+      g1 <-  dat1_sub$MeanDecreaseGini[i1]
+      sorted_indicesg1 <- order(g1,decreasing = T)
+      g3 <- dat1_sub$MeanDecreaseGini[i1] *  (dat1_sub$richness[i1])^(2.5)
+      sorted_indicesg3 <- order(g3,decreasing = T)
+      g4 <- dat1_sub$MeanDecreaseGini[i1] *  (dat1_sub$richness[i1])
+      sorted_indicesg4 <- order(g4,decreasing = T)
+      
+      
+      top_n = floor(threshold*length(g1))
+      taxa_1 = c(taxa_1,sorted_indicesg1[1:top_n])
+      taxa_2 = c(taxa_2,sorted_indicesg3[1:top_n])
+      taxa_3 = c(taxa_3,sorted_indicesg4[1:top_n])
+    }
+    freq_1 <- as.data.frame(table(taxa_1))
+    freq_2 <- as.data.frame(table(taxa_2))
+    freq_3 <- as.data.frame(table(taxa_3))
+    count1 <- sum(freq_1$Freq==max(freq_1$Freq))/top_n/length(unique(dat1_sub$study))
+    count2 <- sum(freq_2$Freq==max(freq_2$Freq))/top_n/length(unique(dat1_sub$study))
+    count3 <- sum(freq_3$Freq==max(freq_3$Freq))/top_n/length(unique(dat1_sub$study))
+
+    dat_features <- rbind(dat_features, data.frame(phenotype=c(phenotype,phenotype,phenotype),freq=c(count1,count2,count3),
+                                                   threshold = c(threshold,threshold,threshold),
+                                                   types = c("Original","Integrated (power)","Integrated (linear)")))
+    print(paste("Phenotype:", phenotype, "Threshold:", threshold))
+    cat("Richness values:", head(dat1_sub$richness[i1], 10), "\n")
+    cat(" g1:", head(g1, 10), "\n")
+    cat(" g3:", head(g3, 10), "\n")
+    cat(" g4:", head(g4, 10), "\n\n")
+    cat("  taxa_1 (Original):   ", head(taxa_1, 20), " ... length:", length(taxa_1), "\n")
+    cat("  taxa_2 (Power):      ", head(taxa_2, 20), " ... length:", length(taxa_2), "\n")
+    cat("  taxa_3 (Linear):     ", head(taxa_3, 20), " ... length:", length(taxa_3), "\n\n")
+    print(paste("Original count:", count1))
+    print(paste("Power count:", count2))
+    print(paste("Linear count:", count3))
+    print(top_n)
+  }
+}
+
+
+p_values <- dat_features %>%
+  filter(types %in% c("Original", "Integrated (power)")) %>%
+  pivot_wider(
+    id_cols = c(phenotype, threshold),
+    names_from = types,
+    values_from = freq
+  ) %>%
+  group_by(phenotype) %>%
+  summarise(
+    p_value = wilcox.test(`Integrated (power)`, Original, paired = TRUE)$p.value,
+    higher_mean = mean(`Integrated (power)`) > mean(Original), 
+    .groups = "drop"
+  )
+
+
+dat_features <- left_join(dat_features, p_values, by = "phenotype")
+
+p_value_positions <- dat_features %>%
+  group_by(phenotype) %>%
+  summarise(
+    x_pos = max(threshold) * 0.75,  
+    y_pos = max(freq) * 1.05       
+  )
+
+p_values <- left_join(p_values, p_value_positions, by = "phenotype")
+
+study_counts <- features %>%
+  group_by(phenotype) %>%
+  summarise(n_studies = n_distinct(study), .groups = "drop") %>%
+  mutate(label = paste0(phenotype, " (", n_studies, ")"))
+
+facet_labels <- setNames(study_counts$label, study_counts$phenotype)
+
+gg1 <- ggplot(data = dat_features,aes(threshold,freq,group=types))+
+  geom_line(aes(color=types),size=0.3)+
+  geom_point(aes(color=types))+facet_wrap(~phenotype, scales = "free", nrow = 1,
+                                                     labeller = labeller(phenotype = facet_labels))+
+  scale_color_manual(values = c("#5495CFFF", "#DB4743FF","gray70"))+
+  geom_text(data = p_values, aes(x = x_pos, y = y_pos, 
+                                 label = paste0("p = ", round(p_value, 3))),
+            inherit.aes = FALSE, color = "black", size = 3)+
+  theme_bw()+ylab("TPR")+xlab("Fraction of selected features")+
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    strip.text = element_text(size = 8),
+    strip.background = element_blank(),
+    axis.text.x = element_text(size = 8,color = 'black'),
+    axis.text.y = element_text(size = 8,color = 'black'),
+    #strip.text.x = element_blank(),
+    axis.ticks = element_line(size = 0.2),
+    legend.position = "none")
+
+
+
+dat_features = NULL
+
+for (threshold in seq(0.02,0.2,by=0.02)){
+  for (phenotype in unique(features$phenotype)){
+    dat1_sub <- features[features$phenotype==phenotype,]
+    taxa_1 = c()
+    taxa_2 = c()
+    taxa_3 = c()
+    for (study1 in unique(dat1_sub$study)){
+      i1 <- dat1_sub$study == study1
+      g1 <-  dat1_sub$MeanDecreaseGini[i1]
+      sorted_indicesg1 <- order(g1,decreasing = T)
+      g3 <- dat1_sub$MeanDecreaseGini[i1] *  (dat1_sub$richness[i1])^(2.5)
+      sorted_indicesg3 <- order(g3,decreasing = T)
+      g4 <- dat1_sub$MeanDecreaseGini[i1] *  (dat1_sub$richness[i1])
+      sorted_indicesg4 <- order(g4,decreasing = T)
+      
+      
+      top_n = floor(threshold*length(g1))
+      taxa_1 = c(taxa_1,sorted_indicesg1[1:top_n])
+      taxa_2 = c(taxa_2,sorted_indicesg3[1:top_n])
+      taxa_3 = c(taxa_3,sorted_indicesg4[1:top_n])
+    }
+    freq_1 <- as.data.frame(table(taxa_1))
+    freq_2 <- as.data.frame(table(taxa_2))
+    freq_3 <- as.data.frame(table(taxa_3))
+    count1 <- sum(freq_1$Freq==1)/top_n/length(unique(dat1_sub$study))
+    count2 <- sum(freq_2$Freq==1)/top_n/length(unique(dat1_sub$study))
+    count3 <- sum(freq_3$Freq==1)/top_n/length(unique(dat1_sub$study))
+    
+    dat_features <- rbind(dat_features, data.frame(phenotype=c(phenotype,phenotype,phenotype),freq=c(count1,count2,count3),
+                                                   threshold = c(threshold,threshold,threshold),
+                                                   types = c("Original","Integrated (power)","Integrated (linear)")))
+  }
+}
+
+
+p_values <- dat_features %>%
+  filter(types %in% c("Original", "Integrated (power)")) %>%
+  pivot_wider(
+    id_cols = c(phenotype, threshold),
+    names_from = types,
+    values_from = freq
+  ) %>%
+  group_by(phenotype) %>%
+  summarise(
+    p_value = wilcox.test(`Integrated (power)`, Original, paired = TRUE)$p.value,
+    higher_mean = mean(`Integrated (power)`) > mean(Original),  
+    .groups = "drop"
+  )
+
+dat_features <- left_join(dat_features, p_values, by = "phenotype")
+
+p_value_positions <- dat_features %>%
+  group_by(phenotype) %>%
+  summarise(
+    x_pos = max(threshold) * 0.75,  
+    y_pos = max(freq) * 1.05       
+  )
+
+p_values <- left_join(p_values, p_value_positions, by = "phenotype")
+
+gg2 <- ggplot(data = dat_features,aes(threshold,freq,group=types))+
+  geom_line(aes(color=types),size=0.3)+
+  geom_point(aes(color=types))+facet_wrap(~phenotype, scales = "free", nrow = 1,
+                                          labeller = labeller(phenotype = facet_labels))+
+  scale_color_manual(values = c("#5495CFFF", "#DB4743FF","gray70"))+
+  geom_text(data = p_values, aes(x = x_pos, y = y_pos, 
+                                 label = paste0("p = ", round(p_value, 3))),
+            inherit.aes = FALSE, color = "black", size = 3)+
+  theme_bw()+ylab("FPR")+xlab("Fraction of selected features")+
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    strip.text = element_text(size = 8),
+    strip.background = element_blank(),
+    axis.text.x = element_text(size = 8,color = 'black'),
+    axis.text.y = element_text(size = 8,color = 'black'),
+    #strip.text.x = element_blank(),
+    axis.ticks = element_line(size = 0.2),
+    legend.position = "none")
+
+gg_tmp <- ggplot(data = dat_features, aes(threshold, freq, group=types)) +
+  geom_line(aes(color=types), size=0.3) +
+  geom_point(aes(color=types)) +
+  facet_wrap(~phenotype, scales = "free", nrow = 1) +
+  scale_color_manual(
+    values = c("#DB4743FF","#5495CFFF","gray70"),
+    labels = c("Gini impurity (Integrated-power)",
+               "Gini impurity (Integrated-linear)",
+               "Gini impurity (original)")
+  ) +
+  theme_bw() +
+  theme(
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    legend.text = element_text(size = 10),
+    legend.justification = "center"
+  ) +
+  guides(color = guide_legend(
+    override.aes = list(linetype = 0, shape = 16, size = 4) # no line, filled circle
+  ))
+
+legend <- cowplot::get_legend(gg_tmp)
+
+gg1 <- gg1 + theme(legend.position="none")
+gg2 <- gg2 + theme(legend.position="none")
+
+p1 <- ggarrange(
+  gg1,
+  legend,
+  gg2,
+  ncol = 1,
+  heights = c(1, 0.08, 1),
+  labels = letters[1:2],   
+  label.x = 0,                 
+  label.y = 1,                 
+  hjust = -0.5,                
+  vjust = 1.5
+)
+print(p1)
+
+```

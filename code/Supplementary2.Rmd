@@ -1,0 +1,1959 @@
+---
+title: "Supplementary Figures"
+author: "Ruoxi Yang"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  eval = FALSE
+)
+```
+
+## Revision 2 
+
+### Figure S17
+
+```{r}
+library(PreLectR)
+library(dplyr)
+library(ggplot2)
+library(ggpubr)
+
+setwd("/Users/yrx/Downloads/FeatureSelection/feature_selection/code")
+
+features <- read.csv("../results/Simulated0.01_features.csv")
+
+ffs_list <- c(0.05, 0.1, 0.2)
+fracs    <- sort(unique(features$frac))
+ngroup   <- length(fracs)
+
+n_rea    <- 10
+top_prop <- 0.10
+gamma    <- 2.5
+
+lambda_steps    <- 10
+inner_spl_ratio <- 0.7
+n_cores         <- 8
+max_iter_fit    <- 10000
+
+drop_status <- function(dat){
+  last <- dat[[ncol(dat)]]
+  if (!is.numeric(last) || tolower(colnames(dat)[ncol(dat)]) %in% c("status","label","y","class")) {
+    dat[, -ncol(dat), drop=FALSE]
+  } else {
+    dat
+  }
+}
+
+top_our_gini <- function(dat_sf, features_sub, frac_val, seed, gamma, top_n){
+  set.seed(seed)
+  dat_x <- drop_status(dat_sf)
+  n     <- nrow(dat_x)
+  n_sub <- max(2, floor(frac_val * n))
+  train_table <- dat_x[sample(seq_len(n), size=n_sub), , drop=FALSE]
+  
+  richness <- colSums(train_table > 0) / nrow(train_table)
+  names(richness) <- colnames(train_table)
+  
+  sub <- features_sub %>% filter(frac == frac_val)
+  r <- as.numeric(richness[sub$Feature])
+  r[is.na(r)] <- 0
+  
+  score <- sub$MeanDecreaseGini * (r ^ gamma)
+  ord <- order(score, decreasing = TRUE)
+  sub$Feature[ord][1:top_n]
+}
+
+top_prelect <- function(dat_sf, frac_val, seed,
+                        lambda_steps, inner_spl_ratio, n_cores, max_iter_fit,
+                        top_n){
+  set.seed(seed)
+  
+  y <- factor(dat_sf[[ncol(dat_sf)]])
+  if (length(levels(y)) != 2) stop("PreLect classification requires y with 2 levels.")
+  
+  dat_x <- drop_status(dat_sf)
+  n     <- nrow(dat_x)
+  n_sub <- max(2, floor(frac_val * n))
+  idx   <- sample(seq_len(n), size=n_sub)
+  
+  X_sf  <- dat_x[idx, , drop=FALSE]
+  y_sub <- y[idx]
+  
+  X_raw <- t(as.matrix(X_sf))
+  storage.mode(X_raw) <- "numeric"
+  X_scaled <- t(scale(t(log1p(X_raw))))
+  X_scaled[is.na(X_scaled)] <- 0
+  
+  lrange <- AutoScanning(X_scaled, X_raw, y_sub, task="classification", step=lambda_steps)
+  out_dir_tmp <- tempdir()
+  
+  tuning_res <- LambdaTuningParallel(
+    X_scaled, X_raw, y_sub, lrange,
+    n_cores = n_cores,
+    outpath = out_dir_tmp,
+    spl_ratio = inner_spl_ratio,
+    task = "classification"
+  )
+  
+  pick <- LambdaDecision(tuning_res$TuningResult, tuning_res$PvlDistSummary,
+                         maxdepth=5, minbucket=3)
+  opt_lmbd <- pick$opt_lmbd
+  
+  message(paste("Selected Lambda:", opt_lmbd, "for frac:", frac_val))
+  
+  prev <- GetPrevalence(X_raw)
+  pre_out <- PreLect(X_scaled, prev, y_sub,
+                     lambda = opt_lmbd, task="classification",
+                     max_iter = max_iter_fit)
+  
+  featprop <- FeatureProperty(X_raw, y_sub, pre_out, task="classification")
+  
+  score <- abs(featprop$coef)
+  ord <- order(score, decreasing = TRUE)
+  featprop$FeatName[ord][1:top_n]
+}
+
+pdf_list <- list()
+index <- 1
+
+for (ffs in ffs_list){
+  
+  dat1_sub <- read.csv(
+    paste("../data/Stool0.01_f_", 2, "_", ffs, ".csv", sep=""),
+    row.names=1, header=TRUE
+  )
+  
+  overlap_ours <- matrix(0, nrow=ngroup, ncol=ngroup)
+  overlap_pl   <- matrix(0, nrow=ngroup, ncol=ngroup)
+  
+  for (rea_id in 1:n_rea){
+    
+    features_sub <- features %>% filter(rea == rea_id, ff == ffs)
+    
+    any_frac <- fracs[1]
+    n_feat <- sum(features_sub$frac == any_frac)
+    top_n <- max(1, floor(top_prop * n_feat))
+    
+    ours_top_list <- vector("list", ngroup)
+    pl_top_list   <- vector("list", ngroup)
+    
+    for (ii in seq_along(fracs)){
+      fr <- fracs[ii]
+      ours_top_list[[ii]] <- top_our_gini(dat1_sub, features_sub, fr, seed=rea_id, gamma=gamma, top_n=top_n)
+      pl_top_list[[ii]] <- top_prelect(dat1_sub, fr, seed=rea_id,
+                                       lambda_steps=lambda_steps,
+                                       inner_spl_ratio=inner_spl_ratio,
+                                       n_cores=n_cores,
+                                       max_iter_fit=max_iter_fit,
+                                       top_n=top_n)
+    }
+    
+    for (i in seq_along(fracs)){
+      for (j in seq_along(fracs)){
+        overlap_ours[i,j] <- overlap_ours[i,j] + length(intersect(ours_top_list[[i]], ours_top_list[[j]])) / top_n
+        overlap_pl[i,j]   <- overlap_pl[i,j]   + length(intersect(pl_top_list[[i]],   pl_top_list[[j]]))   / top_n
+      }
+    }
+  }
+  
+  overlap_ours <- overlap_ours / n_rea
+  overlap_pl   <- overlap_pl   / n_rea
+  
+  diag(overlap_ours) <- NA
+  diag(overlap_pl)   <- NA
+  
+  rownames(overlap_ours) <- colnames(overlap_ours) <- fracs
+  rownames(overlap_pl)   <- colnames(overlap_pl)   <- fracs
+  
+  mean_ours <- apply(overlap_ours, 1, function(x) mean(x, na.rm=TRUE))
+  mean_pl   <- apply(overlap_pl,   1, function(x) mean(x, na.rm=TRUE))
+  
+  sd_ours <- apply(overlap_ours, 1, function(x) sd(x, na.rm=TRUE))
+  sd_pl   <- apply(overlap_pl,   1, function(x) sd(x, na.rm=TRUE))
+  
+  dat_plot <- data.frame(
+    sample_fraction = rep(as.numeric(fracs), 2),
+    Overlap = c(mean_ours, mean_pl),
+    se = c(sd_ours / sqrt(n_rea), sd_pl / sqrt(n_rea)),
+    types = c(rep("Gini^2.5", ngroup),
+              rep("PreLect", ngroup))
+  )
+  
+  pdf_list[[index]] <- ggplot(dat_plot, aes(sample_fraction, Overlap)) +
+    geom_line(aes(group=types, color=types), linetype="dotdash", size=0.4) +
+    geom_point(aes(color=types, shape=types), size=2.5) +
+    geom_errorbar(aes(ymin=Overlap-se, ymax=Overlap+se, color=types), width=0.02) +
+    scale_color_manual(values = c("Gini^2.5" = "#0F7BA2FF", "PreLect" = "#DD5129FF")) + 
+    scale_shape_manual(values = c("Gini^2.5" = 17, "PreLect" = 16)) +
+    theme_bw() + xlab("") + ylab("") +
+    labs(title=paste("Fraction of spiking-in:", ffs)) +
+    theme(
+      plot.title = element_text(hjust=0.5, size=8),
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      axis.text.x = element_text(size=8, color='black'),
+      axis.text.y = element_text(size=8, color='black'),
+      axis.ticks  = element_line(size=0.2),
+      legend.position = "none"
+    )
+  
+  index <- index + 1
+}
+
+pdf_list[[1]] <- pdf_list[[1]] + ylab("Frequency")
+p1 <- do.call(ggarrange, c(pdf_list, list(labels=c("a","b","c"), ncol=3, nrow=1), align="hv"))
+p1
+
+features <- read.csv("../results/Simulated0.05_features.csv")
+
+ffs_list <- c(0.05, 0.1, 0.2)
+fracs    <- sort(unique(features$frac))
+ngroup   <- length(fracs)
+
+n_rea    <- 10
+top_prop <- 0.10
+gamma    <- 2.5
+
+lambda_steps    <- 10
+inner_spl_ratio <- 0.7
+n_cores         <- 8
+max_iter_fit    <- 10000
+
+drop_status <- function(dat){
+  last <- dat[[ncol(dat)]]
+  if (!is.numeric(last) || tolower(colnames(dat)[ncol(dat)]) %in% c("status","label","y","class")) {
+    dat[, -ncol(dat), drop=FALSE]
+  } else {
+    dat
+  }
+}
+
+top_our_gini <- function(dat_sf, features_sub, frac_val, seed, gamma, top_n){
+  set.seed(seed)
+  dat_x <- drop_status(dat_sf)
+  n     <- nrow(dat_x)
+  n_sub <- max(2, floor(frac_val * n))
+  train_table <- dat_x[sample(seq_len(n), size=n_sub), , drop=FALSE]
+  
+  richness <- colSums(train_table > 0) / nrow(train_table)
+  names(richness) <- colnames(train_table)
+  
+  sub <- features_sub %>% filter(frac == frac_val)
+  r <- as.numeric(richness[sub$Feature])
+  r[is.na(r)] <- 0
+  
+  score <- sub$MeanDecreaseGini * (r ^ gamma)
+  ord <- order(score, decreasing = TRUE)
+  sub$Feature[ord][1:top_n]
+}
+
+top_prelect <- function(dat_sf, frac_val, seed,
+                        lambda_steps, inner_spl_ratio, n_cores, max_iter_fit,
+                        top_n){
+  set.seed(seed)
+  
+  y <- factor(dat_sf[[ncol(dat_sf)]])
+  if (length(levels(y)) != 2) stop("PreLect classification requires y with 2 levels.")
+  
+  dat_x <- drop_status(dat_sf)
+  n     <- nrow(dat_x)
+  n_sub <- max(2, floor(frac_val * n))
+  idx   <- sample(seq_len(n), size=n_sub)
+  
+  X_sf  <- dat_x[idx, , drop=FALSE]
+  y_sub <- y[idx]
+  
+  X_raw <- t(as.matrix(X_sf))
+  storage.mode(X_raw) <- "numeric"
+  X_scaled <- t(scale(t(log1p(X_raw))))
+  X_scaled[is.na(X_scaled)] <- 0
+  
+  lrange <- AutoScanning(X_scaled, X_raw, y_sub, task="classification", step=lambda_steps)
+  out_dir_tmp <- tempdir()
+  
+  tuning_res <- LambdaTuningParallel(
+    X_scaled, X_raw, y_sub, lrange,
+    n_cores = n_cores,
+    outpath = out_dir_tmp,
+    spl_ratio = inner_spl_ratio,
+    task = "classification"
+  )
+  
+  pick <- LambdaDecision(tuning_res$TuningResult, tuning_res$PvlDistSummary,
+                         maxdepth=5, minbucket=3)
+  opt_lmbd <- pick$opt_lmbd
+  
+  message(paste("Selected Lambda:", opt_lmbd, "for frac:", frac_val))
+  
+  prev <- GetPrevalence(X_raw)
+  pre_out <- PreLect(X_scaled, prev, y_sub,
+                     lambda = opt_lmbd, task="classification",
+                     max_iter = max_iter_fit)
+  
+  featprop <- FeatureProperty(X_raw, y_sub, pre_out, task="classification")
+  
+  score <- abs(featprop$coef)
+  ord <- order(score, decreasing = TRUE)
+  featprop$FeatName[ord][1:top_n]
+}
+
+pdf_list <- list()
+index <- 1
+
+for (ffs in ffs_list){
+  
+  dat1_sub <- read.csv(
+    paste("../data/Stool0.05_f_", 2, "_", ffs, ".csv", sep=""),
+    row.names=1, header=TRUE
+  )
+  
+  overlap_ours <- matrix(0, nrow=ngroup, ncol=ngroup)
+  overlap_pl   <- matrix(0, nrow=ngroup, ncol=ngroup)
+  
+  for (rea_id in 1:n_rea){
+    
+    features_sub <- features %>% filter(rea == rea_id, ff == ffs)
+    
+    any_frac <- fracs[1]
+    n_feat <- sum(features_sub$frac == any_frac)
+    top_n <- max(1, floor(top_prop * n_feat))
+    
+    ours_top_list <- vector("list", ngroup)
+    pl_top_list   <- vector("list", ngroup)
+    
+    for (ii in seq_along(fracs)){
+      fr <- fracs[ii]
+      ours_top_list[[ii]] <- top_our_gini(dat1_sub, features_sub, fr, seed=rea_id, gamma=gamma, top_n=top_n)
+      pl_top_list[[ii]] <- top_prelect(dat1_sub, fr, seed=rea_id,
+                                       lambda_steps=lambda_steps,
+                                       inner_spl_ratio=inner_spl_ratio,
+                                       n_cores=n_cores,
+                                       max_iter_fit=max_iter_fit,
+                                       top_n=top_n)
+    }
+    
+    for (i in seq_along(fracs)){
+      for (j in seq_along(fracs)){
+        overlap_ours[i,j] <- overlap_ours[i,j] + length(intersect(ours_top_list[[i]], ours_top_list[[j]])) / top_n
+        overlap_pl[i,j]   <- overlap_pl[i,j]   + length(intersect(pl_top_list[[i]],   pl_top_list[[j]]))   / top_n
+      }
+    }
+  }
+  
+  overlap_ours <- overlap_ours / n_rea
+  overlap_pl   <- overlap_pl   / n_rea
+  
+  diag(overlap_ours) <- NA
+  diag(overlap_pl)   <- NA
+  
+  rownames(overlap_ours) <- colnames(overlap_ours) <- fracs
+  rownames(overlap_pl)   <- colnames(overlap_pl)   <- fracs
+  
+  mean_ours <- apply(overlap_ours, 1, function(x) mean(x, na.rm=TRUE))
+  mean_pl   <- apply(overlap_pl,   1, function(x) mean(x, na.rm=TRUE))
+  
+  sd_ours <- apply(overlap_ours, 1, function(x) sd(x, na.rm=TRUE))
+  sd_pl   <- apply(overlap_pl,   1, function(x) sd(x, na.rm=TRUE))
+  
+  dat_plot <- data.frame(
+    sample_fraction = rep(as.numeric(fracs), 2),
+    Overlap = c(mean_ours, mean_pl),
+    se = c(sd_ours / sqrt(n_rea), sd_pl / sqrt(n_rea)),
+    types = c(rep("Gini^2.5", ngroup),
+              rep("PreLect", ngroup))
+  )
+  
+  pdf_list[[index]] <- ggplot(dat_plot, aes(sample_fraction, Overlap)) +
+    geom_line(aes(group=types, color=types), linetype="dotdash", size=0.4) +
+    geom_point(aes(color=types, shape=types), size=2.5) +
+    geom_errorbar(aes(ymin=Overlap-se, ymax=Overlap+se, color=types), width=0.02) +
+    scale_color_manual(values = c("Gini^2.5" = "#0F7BA2FF", "PreLect" = "#DD5129FF")) + 
+    scale_shape_manual(values = c("Gini^2.5" = 17, "PreLect" = 16)) +
+    theme_bw() + xlab("") + ylab("") +
+    labs(title=paste("Fraction of spiking-in:", ffs)) +
+    theme(
+      plot.title = element_text(hjust=0.5, size=8),
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      axis.text.x = element_text(size=8, color='black'),
+      axis.text.y = element_text(size=8, color='black'),
+      axis.ticks  = element_line(size=0.2),
+      legend.position = "none"
+    )
+  
+  index <- index + 1
+}
+
+pdf_list[[1]] <- pdf_list[[1]] + ylab("Frequency")
+p2 <- do.call(ggarrange, c(pdf_list, list(labels=c("d","e","f"), ncol=3, nrow=1), align="hv"))
+p2
+
+features <- read.csv("../results/Simulated0.2_features.csv")
+
+ffs_list <- c(0.05, 0.1, 0.2)
+fracs    <- sort(unique(features$frac))
+ngroup   <- length(fracs)
+
+n_rea    <- 10
+top_prop <- 0.10
+gamma    <- 2.5
+
+lambda_steps    <- 10
+inner_spl_ratio <- 0.7
+n_cores         <- 8
+max_iter_fit    <- 10000
+
+drop_status <- function(dat){
+  last <- dat[[ncol(dat)]]
+  if (!is.numeric(last) || tolower(colnames(dat)[ncol(dat)]) %in% c("status","label","y","class")) {
+    dat[, -ncol(dat), drop=FALSE]
+  } else {
+    dat
+  }
+}
+
+top_our_gini <- function(dat_sf, features_sub, frac_val, seed, gamma, top_n){
+  set.seed(seed)
+  dat_x <- drop_status(dat_sf)
+  n     <- nrow(dat_x)
+  n_sub <- max(2, floor(frac_val * n))
+  train_table <- dat_x[sample(seq_len(n), size=n_sub), , drop=FALSE]
+  
+  richness <- colSums(train_table > 0) / nrow(train_table)
+  names(richness) <- colnames(train_table)
+  
+  sub <- features_sub %>% filter(frac == frac_val)
+  r <- as.numeric(richness[sub$Feature])
+  r[is.na(r)] <- 0
+  
+  score <- sub$MeanDecreaseGini * (r ^ gamma)
+  ord <- order(score, decreasing = TRUE)
+  sub$Feature[ord][1:top_n]
+}
+
+top_prelect <- function(dat_sf, frac_val, seed,
+                        lambda_steps, inner_spl_ratio, n_cores, max_iter_fit,
+                        top_n){
+  set.seed(seed)
+  
+  y <- factor(dat_sf[[ncol(dat_sf)]])
+  if (length(levels(y)) != 2) stop("PreLect classification requires y with 2 levels.")
+  
+  dat_x <- drop_status(dat_sf)
+  n     <- nrow(dat_x)
+  n_sub <- max(2, floor(frac_val * n))
+  idx   <- sample(seq_len(n), size=n_sub)
+  
+  X_sf  <- dat_x[idx, , drop=FALSE]
+  y_sub <- y[idx]
+  
+  X_raw <- t(as.matrix(X_sf))
+  storage.mode(X_raw) <- "numeric"
+  X_scaled <- t(scale(t(log1p(X_raw))))
+  X_scaled[is.na(X_scaled)] <- 0
+  
+  lrange <- AutoScanning(X_scaled, X_raw, y_sub, task="classification", step=lambda_steps)
+  out_dir_tmp <- tempdir()
+  
+  tuning_res <- LambdaTuningParallel(
+    X_scaled, X_raw, y_sub, lrange,
+    n_cores = n_cores,
+    outpath = out_dir_tmp,
+    spl_ratio = inner_spl_ratio,
+    task = "classification"
+  )
+  
+  pick <- LambdaDecision(tuning_res$TuningResult, tuning_res$PvlDistSummary,
+                         maxdepth=5, minbucket=3)
+  opt_lmbd <- pick$opt_lmbd
+  
+  message(paste("Selected Lambda:", opt_lmbd, "for frac:", frac_val))
+  
+  prev <- GetPrevalence(X_raw)
+  pre_out <- PreLect(X_scaled, prev, y_sub,
+                     lambda = opt_lmbd, task="classification",
+                     max_iter = max_iter_fit)
+  
+  featprop <- FeatureProperty(X_raw, y_sub, pre_out, task="classification")
+  
+  score <- abs(featprop$coef)
+  ord <- order(score, decreasing = TRUE)
+  featprop$FeatName[ord][1:top_n]
+}
+
+pdf_list <- list()
+index <- 1
+
+for (ffs in ffs_list){
+  
+  dat1_sub <- read.csv(
+    paste("../data/Stool0.2_f_", 2, "_", ffs, ".csv", sep=""),
+    row.names=1, header=TRUE
+  )
+  
+  overlap_ours <- matrix(0, nrow=ngroup, ncol=ngroup)
+  overlap_pl   <- matrix(0, nrow=ngroup, ncol=ngroup)
+  
+  for (rea_id in 1:n_rea){
+    
+    features_sub <- features %>% filter(rea == rea_id, ff == ffs)
+    
+    any_frac <- fracs[1]
+    n_feat <- sum(features_sub$frac == any_frac)
+    top_n <- max(1, floor(top_prop * n_feat))
+    
+    ours_top_list <- vector("list", ngroup)
+    pl_top_list   <- vector("list", ngroup)
+    
+    for (ii in seq_along(fracs)){
+      fr <- fracs[ii]
+      ours_top_list[[ii]] <- top_our_gini(dat1_sub, features_sub, fr, seed=rea_id, gamma=gamma, top_n=top_n)
+      pl_top_list[[ii]] <- top_prelect(dat1_sub, fr, seed=rea_id,
+                                       lambda_steps=lambda_steps,
+                                       inner_spl_ratio=inner_spl_ratio,
+                                       n_cores=n_cores,
+                                       max_iter_fit=max_iter_fit,
+                                       top_n=top_n)
+    }
+    
+    for (i in seq_along(fracs)){
+      for (j in seq_along(fracs)){
+        overlap_ours[i,j] <- overlap_ours[i,j] + length(intersect(ours_top_list[[i]], ours_top_list[[j]])) / top_n
+        overlap_pl[i,j]   <- overlap_pl[i,j]   + length(intersect(pl_top_list[[i]],   pl_top_list[[j]]))   / top_n
+      }
+    }
+  }
+  
+  overlap_ours <- overlap_ours / n_rea
+  overlap_pl   <- overlap_pl   / n_rea
+  
+  diag(overlap_ours) <- NA
+  diag(overlap_pl)   <- NA
+  
+  rownames(overlap_ours) <- colnames(overlap_ours) <- fracs
+  rownames(overlap_pl)   <- colnames(overlap_pl)   <- fracs
+  
+  mean_ours <- apply(overlap_ours, 1, function(x) mean(x, na.rm=TRUE))
+  mean_pl   <- apply(overlap_pl,   1, function(x) mean(x, na.rm=TRUE))
+  
+  sd_ours <- apply(overlap_ours, 1, function(x) sd(x, na.rm=TRUE))
+  sd_pl   <- apply(overlap_pl,   1, function(x) sd(x, na.rm=TRUE))
+  
+  dat_plot <- data.frame(
+    sample_fraction = rep(as.numeric(fracs), 2),
+    Overlap = c(mean_ours, mean_pl),
+    se = c(sd_ours / sqrt(n_rea), sd_pl / sqrt(n_rea)),
+    types = c(rep("Gini^2.5", ngroup),
+              rep("PreLect", ngroup))
+  )
+  
+  pdf_list[[index]] <- ggplot(dat_plot, aes(sample_fraction, Overlap)) +
+    geom_line(aes(group=types, color=types), linetype="dotdash", size=0.4) +
+    geom_point(aes(color=types, shape=types), size=2.5) +
+    geom_errorbar(aes(ymin=Overlap-se, ymax=Overlap+se, color=types), width=0.02) +
+    scale_color_manual(values = c("Gini^2.5" = "#0F7BA2FF", "PreLect" = "#DD5129FF")) + 
+    scale_shape_manual(values = c("Gini^2.5" = 17, "PreLect" = 16)) +
+    theme_bw() + xlab("") + ylab("") +
+    labs(title=paste("Fraction of spiking-in:", ffs)) +
+    theme(
+      plot.title = element_text(hjust=0.5, size=8),
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      axis.text.x = element_text(size=8, color='black'),
+      axis.text.y = element_text(size=8, color='black'),
+      axis.ticks  = element_line(size=0.2),
+      legend.position = "none"
+    )
+  
+  index <- index + 1
+}
+
+pdf_list[[1]] <- pdf_list[[1]] + ylab("Frequency")
+p3 <- do.call(ggarrange, c(pdf_list, list(labels=c("g","h","i"), ncol=3, nrow=1), align="hv"))
+p3
+
+row1 <- annotate_figure(
+  p1,
+  left = text_grob("Effect size = 0.01", rot = 90, size = 10)
+)
+
+row2 <- annotate_figure(
+  p2,
+  left = text_grob("Effect size = 0.05", rot = 90, size = 10)
+)
+
+row3 <- annotate_figure(
+  p3,
+  left = text_grob("Effect size = 0.20", rot = 90, size = 10)
+)
+p4 <- ggarrange(row1, row2, row3, ncol = 1, nrow = 3, align = "hv")
+print(p4)
+
+legend_plot <- ggplot(data.frame(x=1, y=1, types=factor(c("PreLect", "Gini^2.5"),
+                                                        levels=c("PreLect", "Gini^2.5"))),
+                      aes(x=x, y=y, color=types, shape=types)) +
+  geom_point(size = 3) +
+  scale_color_manual(
+    values = c("PreLect" = "#DD5129FF", "Gini^2.5" = "#0F7BA2FF"),
+    labels = c("PreLect", "ParSlet")
+  ) +
+  scale_shape_manual(
+    values = c("PreLect"=16, "Gini^2.5"=17),
+    labels = c("PreLect", "ParSlet")
+  ) +
+  guides(
+    color = guide_legend(ncol = 2, override.aes = list(size = 4)),
+    shape = guide_legend(ncol = 2)
+  ) +
+  theme_void() +
+  theme(
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    legend.text = element_text(size = 10),
+    legend.box = "horizontal"
+  )
+
+legend <- get_legend(legend_plot)
+
+final_plot <- ggarrange(p4, legend, ncol = 1, heights = c(1, 0.1))
+print(final_plot)
+```
+
+### Figure S18
+
+```{r}
+library(PreLectR)
+library(dplyr)
+library(ggplot2)
+library(ggpubr)
+
+setwd("/Users/yrx/Downloads/FeatureSelection/feature_selection/code")
+
+features <- read.csv("../results/Simulated0.01_features.csv")
+
+ffs_list <- c(0.05, 0.1, 0.2)
+fracs    <- sort(unique(features$frac))
+ngroup   <- length(fracs)
+
+n_rea    <- 10
+top_prop <- 0.10
+gamma    <- 2.5
+
+lambda_steps    <- 50
+inner_spl_ratio <- 0.7
+n_cores         <- 8
+max_iter_fit    <- 10000
+
+drop_status <- function(dat){
+  last <- dat[[ncol(dat)]]
+  if (!is.numeric(last) || tolower(colnames(dat)[ncol(dat)]) %in% c("status","label","y","class")) {
+    dat[, -ncol(dat), drop=FALSE]
+  } else {
+    dat
+  }
+}
+
+top_our_gini <- function(dat_sf, features_sub, frac_val, seed, gamma, top_n){
+  set.seed(seed)
+  dat_x <- drop_status(dat_sf)
+  n     <- nrow(dat_x)
+  n_sub <- max(2, floor(frac_val * n))
+  train_table <- dat_x[sample(seq_len(n), size=n_sub), , drop=FALSE]
+  
+  richness <- colSums(train_table > 0) / nrow(train_table)
+  names(richness) <- colnames(train_table)
+  
+  sub <- features_sub %>% filter(frac == frac_val)
+  r <- as.numeric(richness[sub$Feature])
+  r[is.na(r)] <- 0
+  
+  score <- sub$MeanDecreaseGini * (r ^ gamma)
+  ord <- order(score, decreasing = TRUE)
+  sub$Feature[ord][1:top_n]
+}
+
+top_prelect <- function(dat_sf, frac_val, seed,
+                        lambda_steps, inner_spl_ratio, n_cores, max_iter_fit,
+                        top_n){
+  set.seed(seed)
+  
+  y <- factor(dat_sf[[ncol(dat_sf)]])
+  if (length(levels(y)) != 2) stop("PreLect classification requires y with 2 levels.")
+  
+  dat_x <- drop_status(dat_sf)
+  n     <- nrow(dat_x)
+  n_sub <- max(2, floor(frac_val * n))
+  idx   <- sample(seq_len(n), size=n_sub)
+  
+  X_sf  <- dat_x[idx, , drop=FALSE]
+  y_sub <- y[idx]
+  
+  X_raw <- t(as.matrix(X_sf))
+  storage.mode(X_raw) <- "numeric"
+  X_scaled <- t(scale(t(log1p(X_raw))))
+  X_scaled[is.na(X_scaled)] <- 0
+  
+  lrange <- AutoScanning(X_scaled, X_raw, y_sub, task="classification", step=lambda_steps)
+  out_dir_tmp <- tempdir()
+  
+  tuning_res <- LambdaTuningParallel(
+    X_scaled, X_raw, y_sub, lrange,
+    n_cores = n_cores,
+    outpath = out_dir_tmp,
+    spl_ratio = inner_spl_ratio,
+    task = "classification"
+  )
+  
+  pick <- LambdaDecision(tuning_res$TuningResult, tuning_res$PvlDistSummary,
+                         maxdepth=5, minbucket=3)
+  opt_lmbd <- pick$opt_lmbd
+  
+  message(paste("Selected Lambda:", opt_lmbd, "for frac:", frac_val))
+  
+  prev <- GetPrevalence(X_raw)
+  pre_out <- PreLect(X_scaled, prev, y_sub,
+                     lambda = opt_lmbd, task="classification",
+                     max_iter = max_iter_fit)
+  
+  featprop <- FeatureProperty(X_raw, y_sub, pre_out, task="classification")
+  
+  score <- abs(featprop$coef)
+  ord <- order(score, decreasing = TRUE)
+  featprop$FeatName[ord][1:top_n]
+}
+
+pdf_list <- list()
+index <- 1
+
+for (ffs in ffs_list){
+  
+  dat1_sub <- read.csv(
+    paste("../data/Stool0.01_f_", 2, "_", ffs, ".csv", sep=""),
+    row.names=1, header=TRUE
+  )
+  
+  overlap_ours <- matrix(0, nrow=ngroup, ncol=ngroup)
+  overlap_pl   <- matrix(0, nrow=ngroup, ncol=ngroup)
+  
+  for (rea_id in 1:n_rea){
+    
+    features_sub <- features %>% filter(rea == rea_id, ff == ffs)
+    
+    any_frac <- fracs[1]
+    n_feat <- sum(features_sub$frac == any_frac)
+    top_n <- max(1, floor(top_prop * n_feat))
+    
+    ours_top_list <- vector("list", ngroup)
+    pl_top_list   <- vector("list", ngroup)
+    
+    for (ii in seq_along(fracs)){
+      fr <- fracs[ii]
+      ours_top_list[[ii]] <- top_our_gini(dat1_sub, features_sub, fr, seed=rea_id, gamma=gamma, top_n=top_n)
+      pl_top_list[[ii]] <- top_prelect(dat1_sub, fr, seed=rea_id,
+                                       lambda_steps=lambda_steps,
+                                       inner_spl_ratio=inner_spl_ratio,
+                                       n_cores=n_cores,
+                                       max_iter_fit=max_iter_fit,
+                                       top_n=top_n)
+    }
+    
+    for (i in seq_along(fracs)){
+      for (j in seq_along(fracs)){
+        overlap_ours[i,j] <- overlap_ours[i,j] + length(intersect(ours_top_list[[i]], ours_top_list[[j]])) / top_n
+        overlap_pl[i,j]   <- overlap_pl[i,j]   + length(intersect(pl_top_list[[i]],   pl_top_list[[j]]))   / top_n
+      }
+    }
+  }
+  
+  overlap_ours <- overlap_ours / n_rea
+  overlap_pl   <- overlap_pl   / n_rea
+  
+  diag(overlap_ours) <- NA
+  diag(overlap_pl)   <- NA
+  
+  rownames(overlap_ours) <- colnames(overlap_ours) <- fracs
+  rownames(overlap_pl)   <- colnames(overlap_pl)   <- fracs
+  
+  mean_ours <- apply(overlap_ours, 1, function(x) mean(x, na.rm=TRUE))
+  mean_pl   <- apply(overlap_pl,   1, function(x) mean(x, na.rm=TRUE))
+  
+  sd_ours <- apply(overlap_ours, 1, function(x) sd(x, na.rm=TRUE))
+  sd_pl   <- apply(overlap_pl,   1, function(x) sd(x, na.rm=TRUE))
+  
+  dat_plot <- data.frame(
+    sample_fraction = rep(as.numeric(fracs), 2),
+    Overlap = c(mean_ours, mean_pl),
+    se = c(sd_ours / sqrt(n_rea), sd_pl / sqrt(n_rea)),
+    types = c(rep("Gini^2.5", ngroup),
+              rep("PreLect", ngroup))
+  )
+  
+  pdf_list[[index]] <- ggplot(dat_plot, aes(sample_fraction, Overlap)) +
+    geom_line(aes(group=types, color=types), linetype="dotdash", size=0.4) +
+    geom_point(aes(color=types, shape=types), size=2.5) +
+    geom_errorbar(aes(ymin=Overlap-se, ymax=Overlap+se, color=types), width=0.02) +
+    scale_color_manual(values = c("Gini^2.5" = "#0F7BA2FF", "PreLect" = "#DD5129FF")) + 
+    scale_shape_manual(values = c("Gini^2.5" = 17, "PreLect" = 16)) +
+    theme_bw() + xlab("") + ylab("") +
+    labs(title=paste("Fraction of spiking-in:", ffs)) +
+    theme(
+      plot.title = element_text(hjust=0.5, size=8),
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      axis.text.x = element_text(size=8, color='black'),
+      axis.text.y = element_text(size=8, color='black'),
+      axis.ticks  = element_line(size=0.2),
+      legend.position = "none"
+    )
+  
+  index <- index + 1
+}
+
+pdf_list[[1]] <- pdf_list[[1]] + ylab("Frequency")
+p1 <- do.call(ggarrange, c(pdf_list, list(labels=c("a","b","c"), ncol=3, nrow=1), align="hv"))
+p1
+
+features <- read.csv("../results/Simulated0.05_features.csv")
+
+ffs_list <- c(0.05, 0.1, 0.2)
+fracs    <- sort(unique(features$frac))
+ngroup   <- length(fracs)
+
+n_rea    <- 10
+top_prop <- 0.10
+gamma    <- 2.5
+
+lambda_steps    <- 50
+inner_spl_ratio <- 0.7
+n_cores         <- 8
+max_iter_fit    <- 10000
+
+drop_status <- function(dat){
+  last <- dat[[ncol(dat)]]
+  if (!is.numeric(last) || tolower(colnames(dat)[ncol(dat)]) %in% c("status","label","y","class")) {
+    dat[, -ncol(dat), drop=FALSE]
+  } else {
+    dat
+  }
+}
+
+top_our_gini <- function(dat_sf, features_sub, frac_val, seed, gamma, top_n){
+  set.seed(seed)
+  dat_x <- drop_status(dat_sf)
+  n     <- nrow(dat_x)
+  n_sub <- max(2, floor(frac_val * n))
+  train_table <- dat_x[sample(seq_len(n), size=n_sub), , drop=FALSE]
+  
+  richness <- colSums(train_table > 0) / nrow(train_table)
+  names(richness) <- colnames(train_table)
+  
+  sub <- features_sub %>% filter(frac == frac_val)
+  r <- as.numeric(richness[sub$Feature])
+  r[is.na(r)] <- 0
+  
+  score <- sub$MeanDecreaseGini * (r ^ gamma)
+  ord <- order(score, decreasing = TRUE)
+  sub$Feature[ord][1:top_n]
+}
+
+top_prelect <- function(dat_sf, frac_val, seed,
+                        lambda_steps, inner_spl_ratio, n_cores, max_iter_fit,
+                        top_n){
+  set.seed(seed)
+  
+  y <- factor(dat_sf[[ncol(dat_sf)]])
+  if (length(levels(y)) != 2) stop("PreLect classification requires y with 2 levels.")
+  
+  dat_x <- drop_status(dat_sf)
+  n     <- nrow(dat_x)
+  n_sub <- max(2, floor(frac_val * n))
+  idx   <- sample(seq_len(n), size=n_sub)
+  
+  X_sf  <- dat_x[idx, , drop=FALSE]
+  y_sub <- y[idx]
+  
+  X_raw <- t(as.matrix(X_sf))
+  storage.mode(X_raw) <- "numeric"
+  X_scaled <- t(scale(t(log1p(X_raw))))
+  X_scaled[is.na(X_scaled)] <- 0
+  
+  lrange <- AutoScanning(X_scaled, X_raw, y_sub, task="classification", step=lambda_steps)
+  out_dir_tmp <- tempdir()
+  
+  tuning_res <- LambdaTuningParallel(
+    X_scaled, X_raw, y_sub, lrange,
+    n_cores = n_cores,
+    outpath = out_dir_tmp,
+    spl_ratio = inner_spl_ratio,
+    task = "classification"
+  )
+  
+  pick <- LambdaDecision(tuning_res$TuningResult, tuning_res$PvlDistSummary,
+                         maxdepth=5, minbucket=3)
+  opt_lmbd <- pick$opt_lmbd
+  
+  message(paste("Selected Lambda:", opt_lmbd, "for frac:", frac_val))
+  
+  prev <- GetPrevalence(X_raw)
+  pre_out <- PreLect(X_scaled, prev, y_sub,
+                     lambda = opt_lmbd, task="classification",
+                     max_iter = max_iter_fit)
+  
+  featprop <- FeatureProperty(X_raw, y_sub, pre_out, task="classification")
+  
+  score <- abs(featprop$coef)
+  ord <- order(score, decreasing = TRUE)
+  featprop$FeatName[ord][1:top_n]
+}
+
+pdf_list <- list()
+index <- 1
+
+for (ffs in ffs_list){
+  
+  dat1_sub <- read.csv(
+    paste("../data/Stool0.05_f_", 2, "_", ffs, ".csv", sep=""),
+    row.names=1, header=TRUE
+  )
+  
+  overlap_ours <- matrix(0, nrow=ngroup, ncol=ngroup)
+  overlap_pl   <- matrix(0, nrow=ngroup, ncol=ngroup)
+  
+  for (rea_id in 1:n_rea){
+    
+    features_sub <- features %>% filter(rea == rea_id, ff == ffs)
+    
+    any_frac <- fracs[1]
+    n_feat <- sum(features_sub$frac == any_frac)
+    top_n <- max(1, floor(top_prop * n_feat))
+    
+    ours_top_list <- vector("list", ngroup)
+    pl_top_list   <- vector("list", ngroup)
+    
+    for (ii in seq_along(fracs)){
+      fr <- fracs[ii]
+      ours_top_list[[ii]] <- top_our_gini(dat1_sub, features_sub, fr, seed=rea_id, gamma=gamma, top_n=top_n)
+      pl_top_list[[ii]] <- top_prelect(dat1_sub, fr, seed=rea_id,
+                                       lambda_steps=lambda_steps,
+                                       inner_spl_ratio=inner_spl_ratio,
+                                       n_cores=n_cores,
+                                       max_iter_fit=max_iter_fit,
+                                       top_n=top_n)
+    }
+    
+    for (i in seq_along(fracs)){
+      for (j in seq_along(fracs)){
+        overlap_ours[i,j] <- overlap_ours[i,j] + length(intersect(ours_top_list[[i]], ours_top_list[[j]])) / top_n
+        overlap_pl[i,j]   <- overlap_pl[i,j]   + length(intersect(pl_top_list[[i]],   pl_top_list[[j]]))   / top_n
+      }
+    }
+  }
+  
+  overlap_ours <- overlap_ours / n_rea
+  overlap_pl   <- overlap_pl   / n_rea
+  
+  diag(overlap_ours) <- NA
+  diag(overlap_pl)   <- NA
+  
+  rownames(overlap_ours) <- colnames(overlap_ours) <- fracs
+  rownames(overlap_pl)   <- colnames(overlap_pl)   <- fracs
+  
+  mean_ours <- apply(overlap_ours, 1, function(x) mean(x, na.rm=TRUE))
+  mean_pl   <- apply(overlap_pl,   1, function(x) mean(x, na.rm=TRUE))
+  
+  sd_ours <- apply(overlap_ours, 1, function(x) sd(x, na.rm=TRUE))
+  sd_pl   <- apply(overlap_pl,   1, function(x) sd(x, na.rm=TRUE))
+  
+  dat_plot <- data.frame(
+    sample_fraction = rep(as.numeric(fracs), 2),
+    Overlap = c(mean_ours, mean_pl),
+    se = c(sd_ours / sqrt(n_rea), sd_pl / sqrt(n_rea)),
+    types = c(rep("Gini^2.5", ngroup),
+              rep("PreLect", ngroup))
+  )
+  
+  pdf_list[[index]] <- ggplot(dat_plot, aes(sample_fraction, Overlap)) +
+    geom_line(aes(group=types, color=types), linetype="dotdash", size=0.4) +
+    geom_point(aes(color=types, shape=types), size=2.5) +
+    geom_errorbar(aes(ymin=Overlap-se, ymax=Overlap+se, color=types), width=0.02) +
+    scale_color_manual(values = c("Gini^2.5" = "#0F7BA2FF", "PreLect" = "#DD5129FF")) + 
+    scale_shape_manual(values = c("Gini^2.5" = 17, "PreLect" = 16)) +
+    theme_bw() + xlab("") + ylab("") +
+    labs(title=paste("Fraction of spiking-in:", ffs)) +
+    theme(
+      plot.title = element_text(hjust=0.5, size=8),
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      axis.text.x = element_text(size=8, color='black'),
+      axis.text.y = element_text(size=8, color='black'),
+      axis.ticks  = element_line(size=0.2),
+      legend.position = "none"
+    )
+  
+  index <- index + 1
+}
+
+pdf_list[[1]] <- pdf_list[[1]] + ylab("Frequency")
+p2 <- do.call(ggarrange, c(pdf_list, list(labels=c("d","e","f"), ncol=3, nrow=1), align="hv"))
+p2
+
+features <- read.csv("../results/Simulated0.2_features.csv")
+
+ffs_list <- c(0.05, 0.1, 0.2)
+fracs    <- sort(unique(features$frac))
+ngroup   <- length(fracs)
+
+n_rea    <- 10
+top_prop <- 0.10
+gamma    <- 2.5
+
+lambda_steps    <- 50
+inner_spl_ratio <- 0.7
+n_cores         <- 8
+max_iter_fit    <- 10000
+
+drop_status <- function(dat){
+  last <- dat[[ncol(dat)]]
+  if (!is.numeric(last) || tolower(colnames(dat)[ncol(dat)]) %in% c("status","label","y","class")) {
+    dat[, -ncol(dat), drop=FALSE]
+  } else {
+    dat
+  }
+}
+
+top_our_gini <- function(dat_sf, features_sub, frac_val, seed, gamma, top_n){
+  set.seed(seed)
+  dat_x <- drop_status(dat_sf)
+  n     <- nrow(dat_x)
+  n_sub <- max(2, floor(frac_val * n))
+  train_table <- dat_x[sample(seq_len(n), size=n_sub), , drop=FALSE]
+  
+  richness <- colSums(train_table > 0) / nrow(train_table)
+  names(richness) <- colnames(train_table)
+  
+  sub <- features_sub %>% filter(frac == frac_val)
+  r <- as.numeric(richness[sub$Feature])
+  r[is.na(r)] <- 0
+  
+  score <- sub$MeanDecreaseGini * (r ^ gamma)
+  ord <- order(score, decreasing = TRUE)
+  sub$Feature[ord][1:top_n]
+}
+
+top_prelect <- function(dat_sf, frac_val, seed,
+                        lambda_steps, inner_spl_ratio, n_cores, max_iter_fit,
+                        top_n){
+  set.seed(seed)
+  
+  y <- factor(dat_sf[[ncol(dat_sf)]])
+  if (length(levels(y)) != 2) stop("PreLect classification requires y with 2 levels.")
+  
+  dat_x <- drop_status(dat_sf)
+  n     <- nrow(dat_x)
+  n_sub <- max(2, floor(frac_val * n))
+  idx   <- sample(seq_len(n), size=n_sub)
+  
+  X_sf  <- dat_x[idx, , drop=FALSE]
+  y_sub <- y[idx]
+  
+  X_raw <- t(as.matrix(X_sf))
+  storage.mode(X_raw) <- "numeric"
+  X_scaled <- t(scale(t(log1p(X_raw))))
+  X_scaled[is.na(X_scaled)] <- 0
+  
+  lrange <- AutoScanning(X_scaled, X_raw, y_sub, task="classification", step=lambda_steps)
+  out_dir_tmp <- tempdir()
+  
+  tuning_res <- LambdaTuningParallel(
+    X_scaled, X_raw, y_sub, lrange,
+    n_cores = n_cores,
+    outpath = out_dir_tmp,
+    spl_ratio = inner_spl_ratio,
+    task = "classification"
+  )
+  
+  pick <- LambdaDecision(tuning_res$TuningResult, tuning_res$PvlDistSummary,
+                         maxdepth=5, minbucket=3)
+  opt_lmbd <- pick$opt_lmbd
+  
+  message(paste("Selected Lambda:", opt_lmbd, "for frac:", frac_val))
+  
+  prev <- GetPrevalence(X_raw)
+  pre_out <- PreLect(X_scaled, prev, y_sub,
+                     lambda = opt_lmbd, task="classification",
+                     max_iter = max_iter_fit)
+  
+  featprop <- FeatureProperty(X_raw, y_sub, pre_out, task="classification")
+  
+  score <- abs(featprop$coef)
+  ord <- order(score, decreasing = TRUE)
+  featprop$FeatName[ord][1:top_n]
+}
+
+pdf_list <- list()
+index <- 1
+
+for (ffs in ffs_list){
+  
+  dat1_sub <- read.csv(
+    paste("../data/Stool0.2_f_", 2, "_", ffs, ".csv", sep=""),
+    row.names=1, header=TRUE
+  )
+  
+  overlap_ours <- matrix(0, nrow=ngroup, ncol=ngroup)
+  overlap_pl   <- matrix(0, nrow=ngroup, ncol=ngroup)
+  
+  for (rea_id in 1:n_rea){
+    
+    features_sub <- features %>% filter(rea == rea_id, ff == ffs)
+    
+    any_frac <- fracs[1]
+    n_feat <- sum(features_sub$frac == any_frac)
+    top_n <- max(1, floor(top_prop * n_feat))
+    
+    ours_top_list <- vector("list", ngroup)
+    pl_top_list   <- vector("list", ngroup)
+    
+    for (ii in seq_along(fracs)){
+      fr <- fracs[ii]
+      ours_top_list[[ii]] <- top_our_gini(dat1_sub, features_sub, fr, seed=rea_id, gamma=gamma, top_n=top_n)
+      pl_top_list[[ii]] <- top_prelect(dat1_sub, fr, seed=rea_id,
+                                       lambda_steps=lambda_steps,
+                                       inner_spl_ratio=inner_spl_ratio,
+                                       n_cores=n_cores,
+                                       max_iter_fit=max_iter_fit,
+                                       top_n=top_n)
+    }
+    
+    for (i in seq_along(fracs)){
+      for (j in seq_along(fracs)){
+        overlap_ours[i,j] <- overlap_ours[i,j] + length(intersect(ours_top_list[[i]], ours_top_list[[j]])) / top_n
+        overlap_pl[i,j]   <- overlap_pl[i,j]   + length(intersect(pl_top_list[[i]],   pl_top_list[[j]]))   / top_n
+      }
+    }
+  }
+  
+  overlap_ours <- overlap_ours / n_rea
+  overlap_pl   <- overlap_pl   / n_rea
+  
+  diag(overlap_ours) <- NA
+  diag(overlap_pl)   <- NA
+  
+  rownames(overlap_ours) <- colnames(overlap_ours) <- fracs
+  rownames(overlap_pl)   <- colnames(overlap_pl)   <- fracs
+  
+  mean_ours <- apply(overlap_ours, 1, function(x) mean(x, na.rm=TRUE))
+  mean_pl   <- apply(overlap_pl,   1, function(x) mean(x, na.rm=TRUE))
+  
+  sd_ours <- apply(overlap_ours, 1, function(x) sd(x, na.rm=TRUE))
+  sd_pl   <- apply(overlap_pl,   1, function(x) sd(x, na.rm=TRUE))
+  
+  dat_plot <- data.frame(
+    sample_fraction = rep(as.numeric(fracs), 2),
+    Overlap = c(mean_ours, mean_pl),
+    se = c(sd_ours / sqrt(n_rea), sd_pl / sqrt(n_rea)),
+    types = c(rep("Gini^2.5", ngroup),
+              rep("PreLect", ngroup))
+  )
+  
+  pdf_list[[index]] <- ggplot(dat_plot, aes(sample_fraction, Overlap)) +
+    geom_line(aes(group=types, color=types), linetype="dotdash", size=0.4) +
+    geom_point(aes(color=types, shape=types), size=2.5) +
+    geom_errorbar(aes(ymin=Overlap-se, ymax=Overlap+se, color=types), width=0.02) +
+    scale_color_manual(values = c("Gini^2.5" = "#0F7BA2FF", "PreLect" = "#DD5129FF")) + 
+    scale_shape_manual(values = c("Gini^2.5" = 17, "PreLect" = 16)) +
+    theme_bw() + xlab("") + ylab("") +
+    labs(title=paste("Fraction of spiking-in:", ffs)) +
+    theme(
+      plot.title = element_text(hjust=0.5, size=8),
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      axis.text.x = element_text(size=8, color='black'),
+      axis.text.y = element_text(size=8, color='black'),
+      axis.ticks  = element_line(size=0.2),
+      legend.position = "none"
+    )
+  
+  index <- index + 1
+}
+
+pdf_list[[1]] <- pdf_list[[1]] + ylab("Frequency")
+p3 <- do.call(ggarrange, c(pdf_list, list(labels=c("g","h","i"), ncol=3, nrow=1), align="hv"))
+p3
+
+row1 <- annotate_figure(
+  p1,
+  left = text_grob("Effect size = 0.01", rot = 90, size = 10)
+)
+
+row2 <- annotate_figure(
+  p2,
+  left = text_grob("Effect size = 0.05", rot = 90, size = 10)
+)
+
+row3 <- annotate_figure(
+  p3,
+  left = text_grob("Effect size = 0.20", rot = 90, size = 10)
+)
+p4 <- ggarrange(row1, row2, row3, ncol = 1, nrow = 3, align = "hv")
+print(p4)
+
+legend_plot <- ggplot(data.frame(x=1, y=1, types=factor(c("PreLect", "Gini^2.5"),
+                                                        levels=c("PreLect", "Gini^2.5"))),
+                      aes(x=x, y=y, color=types, shape=types)) +
+  geom_point(size = 3) +
+  scale_color_manual(
+    values = c("PreLect" = "#DD5129FF", "Gini^2.5" = "#0F7BA2FF"),
+    labels = c("PreLect", "ParSlet")
+  ) +
+  scale_shape_manual(
+    values = c("PreLect"=16, "Gini^2.5"=17),
+    labels = c("PreLect", "ParSlet")
+  ) +
+  guides(
+    color = guide_legend(ncol = 2, override.aes = list(size = 4)),
+    shape = guide_legend(ncol = 2)
+  ) +
+  theme_void() +
+  theme(
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    legend.text = element_text(size = 10),
+    legend.box = "horizontal"
+  )
+
+legend <- get_legend(legend_plot)
+
+final_plot <- ggarrange(p4, legend, ncol = 1, heights = c(1, 0.1))
+print(final_plot)
+```
+
+### Figure S20
+
+```{r}
+library(curatedMetagenomicData)
+library(SummarizedExperiment)
+library(dplyr)
+library(tidyr)
+library(randomForest)
+library(pROC)
+library(ggplot2)
+library(ggpubr)
+library(cowplot)
+
+setwd("/Users/yrx/Downloads/FeatureSelection/feature_selection/code")
+set.seed(1)
+
+gamma <- 2.5
+top_prop <- 0.10
+ntree_rf <- 500
+
+corrected_t_test <- function(diffs, n_train, n_test) {
+  n <- length(diffs)
+  if (n < 2) return(NA)
+  
+  mean_d <- mean(diffs)
+  var_d <- var(diffs)
+  
+  corrected_se <- sqrt((1/n + n_test/n_train) * var_d)
+  
+  t_stat <- mean_d / corrected_se
+  p_val <- 2 * pt(-abs(t_stat), df = n - 1)
+  return(p_val)
+}
+
+taxa_table <- curatedMetagenomicData(pattern = "relative_abundance", dryrun = FALSE)
+merged_taxa_table <- mergeData(taxa_table)
+
+X_all <- assay(merged_taxa_table, "relative_abundance")
+meta  <- curatedMetagenomicData::sampleMetadata
+
+meta_sub <- meta[meta$disease %in% c("healthy","IBD","CRC","T2D","RA","ACVD","adenoma","IGT"), ]
+
+all_study <- c(
+  "GuptaA_2019","HanniganGD_2017","HallAB_2017","HMP_2019_ibdmdb",
+  "IjazUZ_2017","NielsenHB_2014","QinJ_2012","MetaCardis_2020_a",
+  "KarlssonFH_2013","SankaranarayananK_2015","YachidaS_2019","ZellerG_2014","HMP_2019_t2d"
+)
+
+meta_sub <- meta_sub[meta_sub$study_name %in% all_study, ]
+rownames(meta_sub) <- meta_sub$sample_id
+
+keep_samples <- intersect(colnames(X_all), rownames(meta_sub))
+meta_sub <- meta_sub[keep_samples, , drop=FALSE]
+X_all    <- X_all[, keep_samples, drop=FALSE]
+
+feat_names <- sub(".*s__", "", rownames(X_all))
+feat_names <- make.unique(feat_names)
+rownames(X_all) <- feat_names
+
+features <- read.csv("../results/Curated_feautures.csv", stringsAsFactors = FALSE)
+
+crc <- features %>%
+  filter(phenotype == "CRC") %>%
+  mutate(
+    Feature = as.character(Feature),
+    study   = as.character(study),
+    score   = MeanDecreaseGini * (richness ^ gamma)
+  ) %>%
+  filter(Feature %in% rownames(X_all))
+
+avail_tbl <- meta_sub %>%
+  filter(disease %in% c("CRC","healthy")) %>%
+  group_by(study_name, disease) %>%
+  summarise(n = dplyr::n(), .groups = "drop") %>%
+  tidyr::pivot_wider(names_from = disease, values_from = n, values_fill = 0) %>%
+  mutate(total = CRC + healthy)
+
+crc_studies <- avail_tbl %>%
+  filter(CRC > 0, healthy > 0) %>%
+  pull(study_name) %>%
+  intersect(unique(crc$study)) %>%
+  sort()
+
+crc_top <- crc %>%
+  filter(study %in% crc_studies) %>%
+  group_by(study) %>%
+  arrange(desc(score), .by_group = TRUE) %>%
+  mutate(n_top = max(1L, floor(top_prop * n()))) %>%
+  filter(row_number() <= n_top) %>%
+  mutate(
+    med_prev   = median(richness, na.rm = TRUE),
+    prev_group = ifelse(richness >= med_prev, "HighPrev", "LowPrev")
+  ) %>%
+  ungroup()
+
+feat_lists <- crc_top %>%
+  group_by(study, prev_group) %>%
+  summarise(features = list(unique(Feature)), .groups="drop")
+
+make_X_aligned <- function(X_df, cols_train) {
+  miss <- setdiff(cols_train, colnames(X_df))
+  if (length(miss) > 0) {
+    for (m in miss) X_df[[m]] <- 0
+  }
+  X_df[, cols_train, drop = FALSE]
+}
+
+res <- list()
+idx <- 1
+crc_studies <- as.character(crc_studies)
+
+for (st_train in crc_studies) {
+  meta_tr <- meta_sub %>% filter(study_name == st_train, disease %in% c("CRC","healthy"))
+  samp_tr <- meta_tr$sample_id
+  y_tr <- factor(meta_tr$disease, levels = c("healthy","CRC"))
+  X_tr_all <- as.data.frame(t(X_all[, samp_tr, drop=FALSE]))
+  
+  high_feats <- feat_lists %>% filter(study == st_train, prev_group == "HighPrev") %>% pull(features)
+  low_feats  <- feat_lists %>% filter(study == st_train, prev_group == "LowPrev")  %>% pull(features)
+  if (length(high_feats) == 0 || length(low_feats) == 0) next
+  
+  rf_high <- randomForest(x = X_tr_all[, high_feats[[1]], drop=FALSE], y = y_tr, ntree = ntree_rf)
+  rf_low  <- randomForest(x = X_tr_all[, low_feats[[1]], drop=FALSE], y = y_tr, ntree = ntree_rf)
+  
+  for (st_test in setdiff(crc_studies, st_train)) {
+    meta_te <- meta_sub %>% filter(study_name == st_test, disease %in% c("CRC","healthy"))
+    y_te <- factor(meta_te$disease, levels = c("healthy","CRC"))
+    if (nlevels(droplevels(y_te)) < 2) next
+    
+    X_te <- as.data.frame(t(X_all[, meta_te$sample_id, drop=FALSE]))
+    prob_high <- predict(rf_high, make_X_aligned(X_te, high_feats[[1]]), type="prob")[, "CRC"]
+    prob_low  <- predict(rf_low,  make_X_aligned(X_te, low_feats[[1]]),  type="prob")[, "CRC"]
+    
+    res[[idx]] <- data.frame(
+      train_study = st_train, test_study = st_test,
+      n_train = nrow(X_tr_all), n_test = nrow(X_te),
+      auc_high = as.numeric(pROC::roc(y_te, prob_high, quiet=TRUE)$auc),
+      auc_low  = as.numeric(pROC::roc(y_te, prob_low,  quiet=TRUE)$auc)
+    )
+    idx <- idx + 1
+  }
+}
+auc_results <- bind_rows(res)
+
+auc_long <- auc_results %>%
+  pivot_longer(cols = c(auc_high, auc_low), names_to = "group", values_to = "AUROC") %>%
+  mutate(group = recode(group, auc_high = "HighPrev", auc_low = "LowPrev"),
+         pair  = paste0(train_study, " -> ", test_study))
+
+auc_diffs <- auc_results %>% mutate(diff = auc_high - auc_low)
+p_corrected_main <- corrected_t_test(auc_diffs$diff, mean(auc_results$n_train), mean(auc_results$n_test))
+p_label_main <- paste0("Corrected Resampled t-test\np = ", formatC(p_corrected_main, format = "e", digits = 2))
+
+p_auc <- ggplot(auc_long, aes(x = group, y = AUROC, color = group, fill = group)) +
+  geom_boxplot(width = 0.6, outlier.shape = NA, alpha = 0.25) +
+  geom_jitter(width = 0.12, size = 1.6, alpha = 0.75) +
+  scale_color_manual(values = c("HighPrev" = "#DD5129FF", "LowPrev" = "#0F7BA2FF")) +
+  scale_fill_manual(values = c("HighPrev" = "#DD5129FF", "LowPrev" = "#0F7BA2FF")) +
+  coord_cartesian(ylim = c(0.45, 1.15)) +
+  theme_bw(base_size = 11) +
+  labs(title = "Cross-study AUROC", x = NULL, y = "AUROC") +
+  annotate("text", x = 1.5, y = 1.1, label = p_label_main, size = 3.2, fontface = "italic") +
+  theme(legend.position = "none", panel.grid.major.x = element_blank())
+
+avg_ntr <- mean(auc_results$n_train)
+avg_nte <- mean(auc_results$n_test)
+
+pvals_prev <- crc_top %>%
+  group_by(study) %>%
+  summarise(
+    p_val = {
+      h <- richness[prev_group == "HighPrev"]
+      l <- richness[prev_group == "LowPrev"]
+      corrected_t_test(h - mean(l), avg_ntr, avg_nte)
+    }, .groups = "drop"
+  ) %>%
+  mutate(label = paste0("corr. p = ", formatC(p_val, format = "e", digits = 2)))
+
+label_pos <- crc_top %>% group_by(study) %>% summarise(y = max(richness, na.rm=T) * 1.2, .groups="drop")
+pvals_plot <- left_join(pvals_prev, label_pos, by = "study")
+
+p_prev <- ggplot(crc_top, aes(x = prev_group, y = richness, color = prev_group, fill = prev_group)) +
+  geom_boxplot(width = 0.6, outlier.shape = NA, alpha = 0.25) +
+  geom_jitter(width = 0.12, size = 1.2, alpha = 0.5) +
+  facet_wrap(~ study, scales = "free_y") +
+  geom_text(data = pvals_plot, aes(x = 1.5, y = y, label = label), inherit.aes = FALSE, size = 2.6, fontface = "italic") +
+  scale_color_manual(values = c("HighPrev" = "#DD5129FF", "LowPrev" = "#0F7BA2FF")) +
+  scale_fill_manual(values = c("HighPrev" = "#DD5129FF", "LowPrev" = "#0F7BA2FF")) +
+  theme_bw(base_size = 12) +
+  labs(title = "Prevalence Distribution of HighPrev vs LowPrev features (top 10%)", x = NULL, y = "Prevalence (richness)") +
+  theme(legend.position = "none", strip.background = element_rect(fill = "grey95", color = NA), strip.text = element_text(face = "bold"))
+
+final_plot <- plot_grid(p_auc, p_prev, labels = c("a", "b"), ncol = 2, rel_widths = c(1, 1.6))
+print(final_plot)
+
+ggsave("../figs/prev_corrected.pdf", plot = final_plot, width = 13, height = 6)
+
+auroc_medians <- auc_long %>%
+  group_by(group) %>%
+  summarise(
+    median_auroc = median(AUROC, na.rm = TRUE),
+    mean_auroc   = mean(AUROC, na.rm = TRUE),
+    n_observations = n()
+  )
+
+print(auroc_medians)
+```
+
+### Figure S21 (R4)
+
+```{r}
+library(PreLectR)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggrepel)
+library(cowplot)
+
+setwd("/Users/yrx/Downloads/FeatureSelection/feature_selection/code")
+
+effect_sizes <- c("0.01", "0.05", "0.2")
+ffs_list     <- c(0.05, 0.1, 0.2)
+n_rea        <- 10
+
+drop_status <- function(dat){
+  target_cols <- c("status", "label", "y", "class", "disease")
+  idx <- which(tolower(colnames(dat)) %in% target_cols)
+  if(length(idx) > 0) return(dat[, -idx, drop=FALSE])
+  return(dat)
+}
+
+get_prelect_top <- function(dat_raw, top_n) {
+  y <- factor(dat_raw[[ncol(dat_raw)]])
+  dat_x <- drop_status(dat_raw)
+  X_raw <- t(as.matrix(dat_x))
+  storage.mode(X_raw) <- "numeric"
+  X_scaled <- t(scale(t(log1p(X_raw))))
+  X_scaled[is.na(X_scaled)] <- 0
+  
+  lrange <- AutoScanning(X_scaled, X_raw, y, task="classification", step=10)
+  tuning_res <- LambdaTuningParallel(X_scaled, X_raw, y, lrange, n_cores=8, 
+                                     outpath=tempdir(), spl_ratio=0.7, task="classification")
+  pick <- LambdaDecision(tuning_res$TuningResult, tuning_res$PvlDistSummary)
+  pre_out <- PreLect(X_scaled, GetPrevalence(X_raw), y, lambda=pick$opt_lmbd, task="classification")
+  featprop <- FeatureProperty(X_raw, y, pre_out, task="classification")
+  
+  featprop <- featprop[order(abs(featprop$coef), decreasing = TRUE), ]
+  return(as.character(featprop$FeatName[1:min(top_n, nrow(featprop))]))
+}
+
+stability_results <- data.frame()
+
+for (ffs in ffs_list) {
+  message("Calculating stability for Spike-in fraction: ", ffs)
+  
+  temp_jaccard_storage <- list()
+  
+  for (rea_id in 1:n_rea) {
+    message("  - Processing Replicate: ", rea_id)
+    
+    method_features <- list(ParSlet = list(), PreLect = list())
+    
+    for (es in effect_sizes) {
+      dat_path <- paste0("../data/Stool", es, "_f_", 2, "_", ffs, ".csv")
+      spike_path <- paste0("../data/Spike_Stool", es, "__f_2_", ffs, ".csv")
+      features_score_path <- paste0("../results/Simulated", es, "_features_all.csv")
+      
+      current_spike_data <- read.csv(spike_path)
+      current_top_n <- nrow(current_spike_data)
+      
+      dat_full <- read.csv(dat_path, row.names = 1, header = TRUE)
+      current_features_all <- read.csv(features_score_path)
+      
+      dat_x <- drop_status(dat_full)
+      richness_full <- colSums(dat_x > 0) / nrow(dat_x)
+      
+      ps_feat <- current_features_all %>% 
+        filter(ff == ffs, rea == rea_id, frac == max(frac)) %>%
+        mutate(ps_score = MeanDecreaseGini * (richness_full[Feature] ^ 2.5)) %>%
+        arrange(desc(ps_score)) %>% 
+        head(current_top_n) %>% 
+        pull(Feature)
+      
+      set.seed(rea_id)
+      pl_feat <- get_prelect_top(dat_full, current_top_n)
+      
+      clean_name <- function(x) {
+        x <- tolower(x)
+        x <- gsub("[[:punct:]]+", ".", x)
+        return(x)
+      }
+      
+      method_features$ParSlet[[as.character(es)]] <- clean_name(ps_feat)
+      method_features$PreLect[[as.character(es)]]  <- clean_name(pl_feat)
+    }
+    
+    es_pairs <- list(c("0.01", "0.05"), c("0.05", "0.2"), c("0.01", "0.2"))
+    for (pair in es_pairs) {
+      es1 <- pair[1]; es2 <- pair[2]; comp_label <- paste0("ES ", es1, " vs ", es2)
+      
+      for (m in c("ParSlet", "PreLect")) {
+        list1 <- method_features[[m]][[es1]]
+        list2 <- method_features[[m]][[es2]]
+        
+        jaccard_val <- length(intersect(list1, list2)) / length(union(list1, list2))
+        
+        key <- paste(comp_label, m, sep = "_")
+        temp_jaccard_storage[[key]] <- c(temp_jaccard_storage[[key]], jaccard_val)
+      }
+    }
+  }
+  
+  for (key in names(temp_jaccard_storage)) {
+    split_key <- strsplit(key, "_")[[1]]
+    comp_name <- split_key[1]
+    method_name <- split_key[2]
+    
+    stability_results <- rbind(stability_results, data.frame(
+      SpikeIn = paste0("Spike: ", ffs),
+      Comparison = comp_name,
+      Method = method_name,
+      Stability = mean(temp_jaccard_storage[[key]])
+    ))
+  }
+}
+
+wide_stability <- stability_results %>%
+  pivot_wider(
+    names_from = Method, 
+    values_from = Stability
+  )
+
+p <- ggplot(wide_stability, aes(x = PreLect, y = ParSlet)) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+  geom_point(aes(color = SpikeIn, shape = Comparison), size = 5, alpha = 0.8) +
+  coord_fixed(xlim = c(0, 1), ylim = c(0, 1)) +
+  theme_bw() +
+  theme(
+    legend.position = "right",
+    panel.grid.minor = element_blank()
+  ) +
+  labs(
+    title = "Stability Comparison",
+    x = "PreLect Stability",
+    y = "ParSlet Stability",
+    color = "Spike-in Ratio",
+    shape = "ES Comparison"
+  )
+print(p)
+```
+
+### Figure S22 (R5)
+
+```{r}
+library(curatedMetagenomicData)
+library(SummarizedExperiment)
+library(PreLectR)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(ggrepel)
+
+setwd("/Users/yrx/Downloads/FeatureSelection/feature_selection/code")
+set.seed(1)
+
+thresholds <- c(0.05, 0.10)
+
+features_all <- read.csv("../results/Curated_feautures.csv", stringsAsFactors = FALSE)
+features_all <- as.data.frame(lapply(features_all, function(x) {
+  if (is(x, "Rle")) return(as.vector(x))
+  return(x)
+}))
+
+taxa_table <- curatedMetagenomicData(pattern = "relative_abundance", dryrun = FALSE)
+merged_taxa_table <- mergeData(taxa_table)
+
+X_all <- assay(merged_taxa_table, "relative_abundance")
+meta  <- curatedMetagenomicData::sampleMetadata
+
+all_study <- c(
+  "GuptaA_2019","HanniganGD_2017","HallAB_2017","HMP_2019_ibdmdb",
+  "IjazUZ_2017","NielsenHB_2014","QinJ_2012","MetaCardis_2020_a",
+  "KarlssonFH_2013","SankaranarayananK_2015","YachidaS_2019","ZellerG_2014","HMP_2019_t2d"
+)
+
+meta_sub <- meta %>%
+  filter(study_name %in% all_study, disease %in% c("CRC", "healthy"))
+
+keep_samples <- intersect(colnames(X_all), meta_sub$sample_id)
+X_all <- X_all[, keep_samples]
+meta_sub <- meta_sub[match(keep_samples, meta_sub$sample_id), ]
+
+feat_names <- sub(".*s__", "", rownames(X_all))
+feat_names <- make.unique(feat_names)
+rownames(X_all) <- feat_names
+
+crc <- features_all %>%
+  filter(phenotype == "CRC") %>%
+  mutate(
+    Feature = as.character(Feature),
+    study   = as.character(study),
+    score   = MeanDecreaseGini * (richness ^ 2.5)
+  ) %>%
+  filter(Feature %in% rownames(X_all))
+
+avail_tbl <- meta_sub %>%
+  filter(disease %in% c("CRC","healthy")) %>%
+  group_by(study_name, disease) %>%
+  summarise(n = dplyr::n(), .groups = "drop") %>%
+  tidyr::pivot_wider(names_from = disease, values_from = n, values_fill = 0) %>%
+  mutate(total = CRC + healthy)
+
+crc_studies <- avail_tbl %>%
+  filter(CRC > 0, healthy > 0) %>%
+  pull(study_name) %>%
+  intersect(unique(crc$study)) %>%
+  sort()
+
+drop_status <- function(dat){
+  target_cols <- c("status", "label", "y", "class", "disease")
+  idx <- which(tolower(colnames(dat)) %in% target_cols)
+  if(length(idx) > 0) return(dat[, -idx, drop=FALSE])
+  return(dat)
+}
+
+get_prelect_top <- function(dat_raw, top_n) {
+  y <- factor(dat_raw[[ncol(dat_raw)]])
+  dat_x <- drop_status(dat_raw)
+  
+  X_raw <- t(as.matrix(dat_x))
+  storage.mode(X_raw) <- "numeric"
+  X_scaled <- t(scale(t(log1p(X_raw))))
+  X_scaled[is.na(X_scaled)] <- 0
+  
+  lrange <- AutoScanning(X_scaled, X_raw, y, task="classification", step=10)
+  tuning_res <- LambdaTuningParallel(X_scaled, X_raw, y, lrange, n_cores=8, 
+                                     outpath=tempdir(), spl_ratio=0.7, task="classification")
+  pick <- LambdaDecision(tuning_res$TuningResult, tuning_res$PvlDistSummary)
+  
+  pre_out <- PreLect(X_scaled, GetPrevalence(X_raw), y, lambda=pick$opt_lmbd, task="classification")
+  featprop <- FeatureProperty(X_raw, y, pre_out, task="classification")
+  
+  featprop <- featprop[order(abs(featprop$coef), decreasing = TRUE), ]
+  return(as.character(featprop$FeatName[1:min(top_n, nrow(featprop))]))
+}
+
+overlap_results <- data.frame()
+
+for (tp in thresholds) {
+  parslet_lists <- list()
+  prelect_lists <- list()
+  
+  for (st in crc_studies) {
+    message("Processing study: ", st, " at Threshold: ", tp)
+    
+    idx <- which(meta_sub$study_name == st)
+    sub_X <- as.data.frame(t(as.matrix(X_all[, idx])))
+    sub_X$label <- factor(meta_sub$disease[idx])
+    
+    n_feat <- ncol(sub_X) - 1
+    top_n <- max(1, floor(tp * n_feat))
+    
+    study_fs <- features_all %>% 
+      filter(study == st, phenotype == "CRC") %>%
+      mutate(ps_score = as.numeric(MeanDecreaseGini) * (as.numeric(richness) ^ 2.5)) %>%
+      arrange(desc(ps_score)) %>%
+      head(top_n)
+    
+    parslet_lists[[st]] <- as.character(study_fs$Feature)
+    prelect_lists[[st]] <- get_prelect_top(sub_X, top_n)
+  }
+  
+  for (i in 1:(length(crc_studies)-1)) {
+    for (j in (i+1):length(crc_studies)) {
+      s1 <- crc_studies[i]; s2 <- crc_studies[j]
+      
+      ps_ov <- length(intersect(parslet_lists[[s1]], parslet_lists[[s2]])) / top_n
+      pl_ov <- length(intersect(prelect_lists[[s1]], prelect_lists[[s2]])) / top_n
+      
+      overlap_results <- rbind(overlap_results, data.frame(
+        Comparison = paste(s1, "vs", s2),
+        Threshold = factor(paste0(tp*100, "%"), levels=c("5%", "10%")),
+        ParSlet_Overlap = ps_ov,
+        PreLect_Overlap = pl_ov
+      ))
+    }
+  }
+}
+
+p <- ggplot(overlap_results, aes(x = PreLect_Overlap, y = ParSlet_Overlap)) +
+  coord_equal(xlim = c(0, 1), ylim = c(0, 1)) + 
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black", linewidth = 0.8) +
+  geom_jitter(aes(color = Threshold, shape = Threshold), 
+              size = 4, width = 0.005, height = 0.005, alpha = 0.8) +
+  geom_text_repel(aes(label = Comparison), size = 2.5, color = "black", max.overlaps = 10) +
+  scale_color_manual(values = c("5%" = "#E41A1C", "10%" = "#377EB8")) +
+  theme_bw() + 
+  labs(
+    title = "Cross-study Pairwise Overlap Comparison",
+    x = "PreLect Pairwise Overlap",
+    y = "ParSlet Pairwise Overlap"
+  ) +
+  theme(
+    plot.title = element_text(face = "bold", size = 14),
+    panel.grid.minor = element_blank(),
+    legend.position = "right"
+  )
+print(p)
+```
+
+### Table S1 
+
+```{r}
+library(glmnet)
+library(CORElearn) 
+library(mRMRe)    
+library(dplyr)
+library(stringr)
+library(tidyr)
+library(PreLectR)
+
+setwd("/Users/yrx/Downloads/FeatureSelection/feature_selection/code")
+
+features_filter <- read.csv(file = "../results/Real_feautures_filter.csv")
+
+extract_genus <- function(x) {
+  result <- "unclassified"
+  clean_x <- gsub("[._]$","", x)
+  
+  patterns <- c("g__", "f__", "o__", "c__", "p__", "k__")
+  
+  for (p in patterns) {
+    regex_pattern <- paste0(p, "(.*?)(?=\\.[a-z]__|;|$)")
+    match <- str_match(clean_x, regex_pattern)[,2]
+    
+    if (!is.na(match)) {
+      match <- gsub("^[._]|[._]$", "", match)
+      if (match != "" && match != ".") return(match)
+    }
+  }
+  return(result)
+}
+
+target_taxa <- c("Ruminococcus", "Clostridium_XVIII", "Faecalibacterium", "Blautia")
+results_list <- list()
+run_id <- 1
+
+for (ffs in unique(features_filter$ff)[6:7]) {
+  taxa_table <- read.csv(file = paste0("../data/", ffs))
+  
+  taxa_table$status_num <- as.numeric(as.factor(taxa_table$status))
+  
+  total_features <- ncol(taxa_table) - 2
+  top_n <- max(1, floor(0.10 * total_features)) 
+
+  set.seed(1)
+  train_idx1 <- sample(1:nrow(taxa_table), size = floor(0.1 * nrow(taxa_table)))
+  set.seed(8)
+  train_idx2 <- sample(1:nrow(taxa_table), size = floor(0.33 * nrow(taxa_table)))
+  indices_list <- list("10%" = train_idx1, "33%" = train_idx2)
+  
+  for (label in names(indices_list)) {
+    train_data_raw <- taxa_table[indices_list[[label]], ]
+    
+    feat_cols_idx <- which(!colnames(train_data_raw) %in% c("status", "status_num"))
+    
+    is_not_constant <- sapply(train_data_raw[, feat_cols_idx], function(x) length(unique(x)) > 1)
+    valid_feats <- names(is_not_constant)[is_not_constant]
+    
+    train_data <- train_data_raw[, c(valid_feats, "status", "status_num")]
+    
+    current_total_features <- length(valid_feats)
+    top_n <- max(1, floor(0.10 * current_total_features)) 
+    
+    x_train <- as.matrix(train_data[, valid_feats])
+    y_train <- as.factor(train_data$status)
+    
+    # --- LASSO ---
+    cv_lasso <- cv.glmnet(x_train, y_train, family = "binomial", alpha = 1)
+    lasso_coefs <- as.matrix(coef(cv_lasso, s = "lambda.min"))
+    lasso_df <- data.frame(feat = rownames(lasso_coefs), coef = abs(lasso_coefs[,1])) %>%
+      filter(feat != "(Intercept)" & coef > 0) %>%
+      arrange(desc(coef))
+    sel_lasso <- head(lasso_df$feat, top_n)
+    
+    # --- Elastic Net ---
+    cv_enet <- cv.glmnet(x_train, y_train, family = "binomial", alpha = 0.5)
+    enet_coefs <- as.matrix(coef(cv_enet, s = "lambda.min"))
+    enet_df <- data.frame(feat = rownames(enet_coefs), coef = abs(enet_coefs[,1])) %>%
+      filter(feat != "(Intercept)" & coef > 0) %>%
+      arrange(desc(coef))
+    sel_enet <- head(enet_df$feat, top_n)
+    
+    # --- ReliefF ---
+    relief_scores <- attrEval(status ~ ., data = train_data[, !colnames(train_data) == "status_num"], estimator = "ReliefFequalK")
+    sel_relief <- names(sort(relief_scores, decreasing = TRUE)[1:top_n])
+    
+    # --- mRMRe ---
+    mrmr_in <- train_data[, !colnames(train_data) == "status"]
+    mrmr_data <- mRMR.data(data = mrmr_in)
+    mrmr_res <- mRMR.classic(data = mrmr_data, target_indices = which(colnames(mrmr_in) == "status_num"), feature_count = top_n)
+    sel_mrmr <- colnames(mrmr_in)[solutions(mrmr_res)[[1]]]
+    
+    methods <- list(LASSO = sel_lasso, Enet = sel_enet, Relief = sel_relief, mRMR = sel_mrmr)
+    
+    for (m_name in names(methods)) {
+      selected_features <- methods[[m_name]]
+      selected_genera <- unique(vapply(selected_features, extract_genus, ""))
+      
+      run_results <- data.frame(
+        Dataset = ffs,
+        TrainSize = label,
+        Method = m_name,
+        Taxon = target_taxa,
+        Identified = target_taxa %in% selected_genera
+      )
+      results_list[[run_id]] <- run_results
+      run_id <- run_id + 1
+    }
+  }
+}
+
+final_df <- do.call(rbind, results_list)
+summary_table <- final_df %>%
+  group_by(Method, Taxon) %>%
+  summarize(Times_Identified = sum(Identified), .groups = 'drop') %>%
+  pivot_wider(names_from = Method, values_from = Times_Identified)
+
+print(summary_table)
+
+output_dir <- "./prelect_output"
+if(!dir.exists(output_dir)) dir.create(output_dir)
+
+extract_genus <- function(x) {
+  result <- "unclassified"
+  clean_x <- gsub("[._]$","", x)
+  patterns <- c("g__", "f__", "o__", "c__", "p__", "k__")
+  for (p in patterns) {
+    match <- str_match(clean_x, paste0(p, "([^.; ]*)"))[,2]
+    if (!is.na(match) && match != "" && match != "." && match != "_") return(match)
+  }
+  return(result)
+}
+
+target_taxa <- c("Ruminococcus", "Clostridium_XVIII", "Faecalibacterium", "Blautia")
+results_list <- list()
+run_id <- 1
+
+for (ffs in unique(features_filter$ff)[6:7]) {
+  
+  taxa_table <- read.csv(file = paste0("../data/", ffs))
+  taxa_table$status_fac <- factor(taxa_table$status)
+  
+  set.seed(1)
+  train_idx1 <- sample(1:nrow(taxa_table), size = floor(0.1 * nrow(taxa_table)))
+  set.seed(8)
+  train_idx2 <- sample(1:nrow(taxa_table), size = floor(0.33 * nrow(taxa_table)))
+  indices_list <- list("10%" = train_idx1, "33%" = train_idx2)
+  
+  for (label in names(indices_list)) {
+    train_data <- taxa_table[indices_list[[label]], ]
+    
+    feat_cols_all <- which(!colnames(train_data) %in% c("status", "status_fac"))
+    is_constant <- sapply(train_data[, feat_cols_all], function(x) length(unique(x)) == 1)
+    cols_to_keep <- names(is_constant)[!is_constant]
+    
+    top_n <- max(1, floor(0.10 * length(cols_to_keep)))
+    
+    X_raw <- t(as.matrix(train_data[, cols_to_keep]))
+    X_scaled <- t(scale(t(X_raw)))
+    diagnosis <- train_data$status_fac
+    
+    message(paste("Scanning Lambda for:", ffs, "| Split:", label))
+    lrange <- AutoScanning(X_scaled, X_raw, diagnosis, task = "classification", step = 30)
+    
+    tuning_res <- LambdaTuning(X_scaled, X_raw, diagnosis, lrange, 
+                               outpath = output_dir, 
+                               spl_ratio = 0.7, 
+                               task = "classification")
+    
+    lmbd_picking <- LambdaDecision(tuning_res$TuningResult, tuning_res$PvlDistSummary)
+    
+    prevalence <- GetPrevalence(X_raw)
+    prelect_out <- PreLect(X_scaled, prevalence, diagnosis, 
+                           lambda = lmbd_picking$opt_lmbd, 
+                           task = "classification", 
+                           max_iter = 100000)
+    
+    prelect_coefs <- unlist(prelect_out$coef)
+    
+    prelect_res_df <- data.frame(
+      Feature = cols_to_keep, 
+      Coef = as.numeric(prelect_coefs)
+    ) %>%
+      mutate(AbsCoef = abs(Coef)) %>%
+      arrange(desc(AbsCoef))
+    
+    selected_features <- head(prelect_res_df$Feature, top_n)
+    selected_genera <- unique(vapply(selected_features, extract_genus, ""))
+    
+    run_results <- data.frame(
+      Dataset = ffs,
+      TrainSize = label,
+      Taxon = target_taxa,
+      Identified = target_taxa %in% selected_genera
+    )
+    
+    results_list[[run_id]] <- run_results
+    run_id <- run_id + 1
+  }
+}
+
+final_prelect_df <- do.call(rbind, results_list)
+
+summary_prelect <- final_prelect_df %>%
+  group_by(Taxon) %>%
+  summarize(
+    Times_Identified = sum(Identified),
+    Total_Runs = n(),
+    Consistency_Percentage = (sum(Identified) / n()) * 100
+  )
+
+print(as.data.frame(summary_prelect))
+```
